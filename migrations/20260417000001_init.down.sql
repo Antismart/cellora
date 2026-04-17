@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS indexer_state;
+DROP TABLE IF EXISTS cells;
+DROP TABLE IF EXISTS transactions;
+DROP TABLE IF EXISTS blocks;
