@@ -1,0 +1,32 @@
+[package]
+name = "cellora-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared configuration, observability, and CKB client for the Cellora indexer."
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+figment = { workspace = true }
+dotenvy = { workspace = true }
+ckb-jsonrpc-types = { workspace = true }
+ckb-types = { workspace = true }
+ckb-hash = { workspace = true }
+hex = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }

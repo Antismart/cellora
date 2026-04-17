@@ -1,0 +1,47 @@
+[package]
+name = "cellora-indexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Block ingestion service that polls a CKB node and writes canonical data to Postgres."
+default-run = "cellora-indexer"
+
+[lints]
+workspace = true
+
+[lib]
+name = "cellora_indexer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cellora-indexer"
+path = "src/main.rs"
+
+[dependencies]
+cellora-common = { path = "../common" }
+cellora-db = { path = "../db" }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ckb-jsonrpc-types = { workspace = true }
+ckb-types = { workspace = true }
+hex = { workspace = true }
+futures = { workspace = true }
+sqlx = { workspace = true }
+bigdecimal = { workspace = true }
+dotenvy = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sqlx = { workspace = true }
