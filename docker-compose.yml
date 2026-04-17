@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cellora-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cellora
+      POSTGRES_PASSWORD: cellora
+      POSTGRES_DB: cellora
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cellora -d cellora"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: cellora-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  ckb:
+    image: nervos/ckb:v0.117.0
+    container_name: cellora-ckb
+    restart: unless-stopped
+    entrypoint: ["/opt/ckb/entrypoint.sh"]
+    command: ["run"]
+    environment:
+      CKB_CHAIN: dev
+    ports:
+      - "8114:8114"
+      - "8115:8115"
+    volumes:
+      - ckb_data:/var/lib/ckb
+      - ./ops/ckb/entrypoint.sh:/opt/ckb/entrypoint.sh:ro
+    healthcheck:
+      # The image ships without curl/wget/nc. Perl is present, so use a bare
+      # TCP connect on the RPC port — the node binds it last, so a successful
+      # connect means RPC is serving.
+      test:
+        - CMD-SHELL
+        - perl -MIO::Socket::INET -e 'IO::Socket::INET->new(PeerAddr=>"127.0.0.1:8114",Timeout=>2) or exit 1'
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  ckb-miner:
+    image: nervos/ckb:v0.117.0
+    container_name: cellora-ckb-miner
+    restart: unless-stopped
+    depends_on:
+      ckb:
+        condition: service_healthy
+    entrypoint: ["/opt/ckb/entrypoint.sh"]
+    command: ["miner"]
+    volumes:
+      - ckb_data:/var/lib/ckb
+      - ./ops/ckb/entrypoint.sh:/opt/ckb/entrypoint.sh:ro
+
+volumes:
+  pg_data:
+  redis_data:
+  ckb_data:
