@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO cells (\n                tx_hash, output_index, block_number, capacity_shannons,\n                lock_code_hash, lock_hash_type, lock_args, lock_hash,\n                type_code_hash, type_hash_type, type_args, type_hash,\n                data\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4",
+        "Int8",
+        "Int8",
+        "Bytea",
+        "Int2",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Int2",
+        "Bytea",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44afeba5ed188be6fed1acaeea1cd30d07b7581aa6f1fc52f5aa9641a47f423a"
+}

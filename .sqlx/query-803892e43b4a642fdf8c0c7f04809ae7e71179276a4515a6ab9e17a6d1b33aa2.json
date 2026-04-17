@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO blocks (\n            number, hash, parent_hash, timestamp_ms, epoch,\n            transactions_count, proposals_count, uncles_count, nonce, dao\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Bytea",
+        "Int8",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Numeric",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "803892e43b4a642fdf8c0c7f04809ae7e71179276a4515a6ab9e17a6d1b33aa2"
+}

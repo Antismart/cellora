@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE cells\n               SET consumed_by_tx_hash      = $3,\n                   consumed_by_input_index  = $4,\n                   consumed_at_block_number = $5\n             WHERE tx_hash = $1 AND output_index = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4",
+        "Bytea",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a45e07ef1c1ee2455bb442f91fc58ffc83e1585eb1a27ef2da5c6d3fedf724ac"
+}
