@@ -277,38 +277,3 @@ compile-time query checking for the database layer, `ckb-jsonrpc-types` +
 and rate limiting. Cloudflare sits at the edge. Docker Compose for local
 development, Kubernetes for production. Observability via OpenTelemetry
 tracing and Prometheus metrics.
-
-## Current state vs. roadmap
-
-| Area                       | Status                               |
-|----------------------------|--------------------------------------|
-| Block/tx/cell ingestion    | Shipped                              |
-| Live/dead cell accounting  | Shipped (via `consumed_*` columns)   |
-| Indexer state + tip        | Shipped                              |
-| Graceful shutdown          | Shipped                              |
-| REST API                   | Next milestone                       |
-| GraphQL + auth + rate limit| Milestone after                      |
-| Reorg handling             | Designed; not yet implemented        |
-| Partitioning on `cells`    | Deferred to production hardening     |
-| Webhooks / subscriptions   | Planned                              |
-| Grafana + OpenTelemetry    | Planned                              |
-
-## Non-goals
-
-- **Not a wallet backend.** No key management, no transaction construction.
-  Read-only data layer.
-- **Not a replacement for the node's built-in indexer** for local, single-
-  user workloads. The value proposition is multi-tenant, SLO-backed, with
-  a higher-level query surface — not raw speed on a laptop.
-- **Not consensus-aware.** We trust the node we poll; we don't validate
-  proofs ourselves.
-
-## Open questions we'd value input on
-
-1. Are there CKB RPC stability or compatibility quirks we should be planning
-   around when a node is upgraded?
-2. Well-known script tagging (Sighash, MultiSig, xUDT, Spore, RGB++ etc.) —
-   is there a canonical source the ecosystem uses, or should we maintain our
-   own registry?
-3. Reorg depth in practice on mainnet — what window should we assume when
-   sizing the rollback path?
