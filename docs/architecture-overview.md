@@ -1,27 +1,27 @@
 # Cellora — Architecture Overview
 
-Audience: CKB protocol and ecosystem engineers. This document describes the
-shape of the system, the design choices specific to CKB's cell model, and the
-current state of the implementation versus what is still on the roadmap.
+A design document for a multi-tenant indexing and query service over the CKB
+(Nervos) chain. It describes the system's planes, the decisions behind each
+one, and the tradeoffs those decisions accept.
 
-## Problem
+## Context
 
-Anyone building a non-trivial CKB application needs indexed access to the
-chain. Running a full node is only the first step — most query patterns
-(live cells by lock, historical cells by type, transaction history for an
-address) require an indexer and a database behind it. Every team currently
-pays that cost on their own.
+An application reading CKB on-chain state needs more than a node. The
+dominant query patterns — live cells by lock, cells by type, transaction
+history for an address, outpoint lookups — require a normalized store with
+indexes tuned for those access paths. The system described here is that
+store, fronted by a multi-tenant REST and GraphQL surface with the
+operational properties (reorg safety, observability, SLOs) expected of a
+data layer that other services depend on.
 
-The landscape today is the node's built-in `ckb-indexer`, Mercury, and various
-bespoke indexers that teams run internally. The built-in indexer is excellent
-for local wallet use but is not designed as a multi-tenant data layer.
-Mercury is more ambitious in scope and we are leaning on the lessons from its
-design rather than attempting to compete with it feature-for-feature.
+The design constraints that shape every other decision:
 
-Cellora is scoped deliberately narrower: a production data layer for cells,
-transactions and blocks, with a REST and GraphQL surface, multi-tenant auth,
-and operational qualities (reorg safety, observability, SLOs) that let a DApp
-team treat it as infrastructure.
+- Reads dominate writes by orders of magnitude.
+- The write path is inherently serial (a chain has one tip).
+- The chain can reorg, and the store has to reflect reality, not a stale
+  branch.
+- Every record in the store is reconstructable from the chain. The database
+  is a cache, not a ledger.
 
 ## System shape
 
@@ -64,15 +64,17 @@ Three planes, each scaling independently, sitting behind a CKB full node.
        └────────────────────────────────────────────┘
 ```
 
-The ingestion plane is the only component with write access to PostgreSQL.
-The query plane is stateless and reads only. This separation is the load-
-bearing decision in the design — everything else follows from it.
+The load-bearing decision is that the ingestion plane is the only writer to
+PostgreSQL and the query plane is stateless and read-only. Every other
+property of the system — the simplicity of the write path, the horizontal
+scalability of the read path, the cleanliness of the reorg algorithm — is
+downstream of that separation.
 
 ## Ingestion plane
 
-The indexer is a single Rust process that polls the CKB node, parses blocks
-into normalized records and writes them to PostgreSQL. It is the only writer
-to the database.
+The indexer is a single process that polls the CKB node, parses blocks into
+normalized records, and writes them to PostgreSQL. It is the sole writer to
+the database.
 
 ```
    ┌────────────┐   poll 2s     ┌─────────┐   BlockView    ┌──────────┐
@@ -96,34 +98,36 @@ to the database.
                                             └────────────┘
 ```
 
-**RPC surface used.** The indexer relies on three JSON-RPC methods today:
-`get_tip_block_number`, `get_block_by_number`, and `get_blockchain_info`. The
-polling default is 2000 ms and is configurable via `CELLORA_POLL_INTERVAL_MS`.
-We are not currently using the subscription RPCs; polling is simpler to
-reason about and the 2 s cadence is well inside CKB's block time.
+**Polling over subscription.** The indexer calls `get_tip_block_number`,
+`get_block_by_number` and `get_blockchain_info` on a 2 s cadence (well
+inside the block time). Polling is simpler to reason about than streaming
+subscriptions, recovers from transient connection loss without special
+cases, and is sufficient for the latency targets of a data layer. The
+tradeoff is a few seconds of indexing lag, accepted in exchange for
+simpler failure semantics.
 
 **Parsing.** Blocks are parsed using `ckb-jsonrpc-types` directly — scripts,
-outpoints and capacity are carried through with their native types, not
-re-invented. Hashes are stored raw (`BYTEA`, 32 bytes) rather than as hex so
-equality lookups read from narrow fixed-width columns.
+outpoints, and capacities pass through with their native types rather than
+being re-invented. Hashes are stored raw as `BYTEA` (32 bytes) rather than
+hex strings so equality lookups and joins read from narrow fixed-width
+columns.
 
-**Per-block transaction.** Everything a block contributes — new block row,
-its transactions, its outputs (new cells), updates to any inputs (marking
-previously-live cells as consumed) and the advancement of `indexer_state` —
-is committed in a single PostgreSQL transaction. Either a block is fully
-indexed or it is not indexed at all.
+**Per-block transaction.** A block's entire contribution — the block row,
+its transactions, its output cells, the updates that mark previously-live
+cells as consumed, and the advancement of the `indexer_state` tip pointer —
+is committed in one PostgreSQL transaction. Either a block is fully indexed
+or it is not indexed at all. Readers never observe half a block.
 
-**Graceful shutdown.** A `CancellationToken` wired to `SIGINT`/`SIGTERM`
-lets the poller finish the in-flight block before exiting. No block is ever
-left half-written.
+**Graceful shutdown.** A cancellation token wired to `SIGINT`/`SIGTERM` lets
+the poller finish the in-flight block before exiting. No block is left
+half-written on shutdown.
 
 ## Data model
 
-PostgreSQL is the source of truth for query-serving but not for the chain —
-every record is reconstructable from the CKB node. The database is a cache,
-not a ledger.
+PostgreSQL is the source of truth for query-serving. It is not the source
+of truth for the chain — every record can be rebuilt from the node.
 
-**Schema (current).**
+**Schema.**
 
 ```
 blocks (number PK, hash, parent_hash, timestamp_ms, epoch,
@@ -149,39 +153,36 @@ indexer_state (singleton row: last_indexed_block, last_indexed_hash)
 
 **Indexing decisions.**
 
-- `cells_lock_hash_idx` on `lock_hash` — the dominant query pattern (cells
-  for an address / a known lock).
+- `cells_lock_hash_idx` on `lock_hash` — the dominant query pattern.
 - `cells_type_hash_idx` on `type_hash` as a **partial index** where
-  `type_hash IS NOT NULL`, so cells without a type script (the common case)
-  don't bloat the index.
-- `cells_consumed_idx` on `consumed_by_tx_hash` is also partial
+  `type_hash IS NOT NULL`. Cells without a type script (the common case) do
+  not bloat the index.
+- `cells_consumed_idx` on `consumed_by_tx_hash`, also partial
   (`WHERE consumed_by_tx_hash IS NOT NULL`), so live cells — the majority
-  of the table — stay out of that index.
-- Outpoint lookup is free via the `(tx_hash, output_index)` primary key.
+  of the table — stay out of the index.
+- Outpoint lookup is covered by the `(tx_hash, output_index)` primary key.
 
 **Script representation.** Each cell stores the three script components
 (`code_hash`, `hash_type`, `args`) separately *and* the precomputed script
-hash. This lets callers filter by the hash for O(1) lookups but also by
-prefix on `code_hash` + `hash_type` + `args` when they want pattern matching
-(for example, xUDT cells with a particular owner lock prefix). We do not yet
-normalize or tag well-known scripts (Sighash, MultiSig, xUDT, Spore) — that
-is a future enrichment on top of the raw data.
+hash. Callers can filter by hash for O(1) lookups, or by prefix on the raw
+components when they need pattern matching. Well-known script
+classification (tagging common scripts) is an enrichment on top of the raw
+data rather than a property of the base schema.
 
 **Live/dead accounting.** A cell is live when `consumed_by_tx_hash IS NULL`.
-When an input references a previously-indexed output, the consuming
-transaction's block write updates those three `consumed_*` columns in the
-same per-block transaction. A single query on `lock_hash` filtered by
-`consumed_by_tx_hash IS NULL` returns the live cell set for a lock.
+When a new block's input references a previously-indexed output, the
+consuming transaction's write updates the `consumed_*` columns in the same
+per-block transaction. A single query on `lock_hash` filtered by
+`consumed_by_tx_hash IS NULL` returns the live set for that lock.
 
-**Partitioning.** Not yet in place. The plan is range partitioning on
-`cells.block_number` so historical ranges can be detached / archived without
-touching the live partition. This is scheduled for the production-readiness
-milestone rather than retrofitted later.
+**Partitioning.** Range partitioning on `cells.block_number` is on the
+roadmap once volume justifies it. Partitioning by block range lets
+historical ranges be detached or archived without touching the live
+partition, and keeps the hot query path small.
 
 ## Query plane
 
-Stateless Axum services read from PostgreSQL (with read replicas in
-production) and a Redis cache.
+Stateless Axum services read from PostgreSQL replicas and a Redis cache.
 
 ```
    client ──▶ Cloudflare ──▶ Axum ──▶ ┌── REST handlers  ──┐
@@ -202,26 +203,28 @@ production) and a Redis cache.
                                                   └──────────────┘
 ```
 
-Every response carries the indexer's tip height and the node's tip height so
-clients can compute their own freshness. Cache entries in Redis are keyed by
-query signature and invalidated on reorg via pub/sub from the ingestion
-plane (see below). Pagination is cursor-based with opaque, base64-encoded
-cursors so the on-the-wire format can evolve without breaking clients.
+Every response carries the indexer's tip height and the node's tip height
+so clients can compute their own freshness rather than having to trust the
+service. Cache entries are keyed by query signature and invalidated by
+reorg events published on Redis pub/sub by the ingestion plane. Pagination
+is cursor-based with opaque, base64-encoded cursors so the wire format can
+evolve without breaking clients.
 
 ## Edge and control plane
 
-Cloudflare terminates TLS and absorbs abuse. Authentication is API-key based;
-keys are hashed with Argon2 and stored per-organization with a tier
-(free / starter / pro). Rate limiting is a per-key token bucket in Redis,
-with separate buckets for REST and GraphQL since the two surfaces have
-different cost profiles. Exceeded limits return `429` with `Retry-After`.
+Cloudflare terminates TLS and absorbs abuse at the edge. Authentication is
+API-key based; keys are Argon2-hashed and scoped to an organization with a
+tier (free / starter / pro). Rate limiting is a per-key token bucket held
+in Redis, with separate buckets for REST and GraphQL because the two
+surfaces have different cost profiles. Exceeded limits return `429` with a
+`Retry-After` header.
 
 ## Reorg handling
 
-Reorgs are treated as a first-class case, not an edge case. The indexer
-validates the parent-hash chain on every block and, on a mismatch, walks
-back to the divergence point, rolls back affected blocks in a single
-database transaction, and re-indexes forward.
+Reorgs are a first-class case, not an edge case. The indexer validates the
+parent-hash chain on every new block; on a mismatch, it walks back to the
+divergence point, rolls the database back to that point in a single
+transaction, and resumes forward indexing.
 
 ```
   new block N arrives from CKB
@@ -249,22 +252,19 @@ database transaction, and re-indexes forward.
                 consumers (webhooks, subscriptions) can react
 ```
 
-**Status.** This is the design. Reorg detection, rollback, and the
-`reorg_log` audit table are scheduled for the observability/correctness
-milestone, not yet in the current build. Until then the indexer assumes the
-happy path, which is acceptable for the dev-node / staging environments the
-service currently runs against but is the main item blocking production
-traffic against mainnet.
+The rollback being transactional means no reader ever sees the system in a
+split-brain state where the recorded tip is on the new chain but some of
+the old chain's cells are still present.
 
 ## Consistency and correctness
 
-- **Single-writer model** eliminates write-side concurrency. There is no
-  scenario in which two processes race on the cell table.
-- **One transaction per block** means the database never observes a partial
-  block. Readers either see block N in full or they don't see it.
-- **`indexer_state` is updated inside that same transaction**, so the
+- **Single-writer model** eliminates write-side concurrency. No scenario
+  involves two processes racing on the cell table.
+- **One transaction per block** means the database never observes a
+  partial block. Readers see block N in full or not at all.
+- **`indexer_state` advances inside that same transaction**, so the
   recorded tip can never be ahead of the data.
-- **Reorgs are transactional** — the rollback and the advancement of
+- **Reorgs are transactional** — rollback and the advancement of
   `indexer_state` to the common ancestor happen together.
 - **Every record is reconstructable** from the node, so the recovery story
   for any corruption is "reindex."
@@ -273,7 +273,7 @@ traffic against mainnet.
 
 Rust throughout: Axum for HTTP, async-graphql for GraphQL, SQLx with
 compile-time query checking for the database layer, `ckb-jsonrpc-types` +
-`reqwest` for the RPC client. PostgreSQL is the store. Redis handles cache
-and rate limiting. Cloudflare sits at the edge. Docker Compose for local
-development, Kubernetes for production. Observability via OpenTelemetry
-tracing and Prometheus metrics.
+`reqwest` for the RPC client. PostgreSQL is the store. Redis handles
+caching and rate limiting. Cloudflare sits at the edge. Docker Compose for
+local development, Kubernetes for production. Observability via
+OpenTelemetry tracing and Prometheus metrics.
