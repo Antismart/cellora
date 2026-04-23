@@ -16,19 +16,22 @@ use axum::Json;
 use cellora_db::models::Block;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use utoipa::ToSchema;
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult, ErrorEnvelope};
 use crate::hex::Hex32;
 use crate::state::AppState;
 
 /// Wire-format shape of a single block.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BlockResponse {
     /// Block number.
     pub number: i64,
-    /// Block hash.
+    /// Block hash (0x-prefixed 32-byte hex string).
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub hash: Hex32,
     /// Parent block hash.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub parent_hash: Hex32,
     /// Block timestamp in milliseconds since the Unix epoch.
     pub timestamp_ms: i64,
@@ -43,6 +46,7 @@ pub struct BlockResponse {
     /// Raw nonce, rendered as a decimal string.
     pub nonce: String,
     /// Nervos DAO field.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub dao: Hex32,
     /// When Cellora first observed this block.
     pub indexed_at: DateTime<Utc>,
@@ -69,6 +73,15 @@ impl TryFrom<Block> for BlockResponse {
 }
 
 /// Handler for `GET /v1/blocks/latest`.
+#[utoipa::path(
+    get,
+    path = "/v1/blocks/latest",
+    tag = "blocks",
+    responses(
+        (status = 200, description = "Highest indexed block", body = BlockResponse),
+        (status = 404, description = "No blocks indexed yet", body = ErrorEnvelope),
+    ),
+)]
 pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<BlockResponse>> {
     let block = cellora_db::blocks::latest(&state.db)
         .await?
@@ -81,6 +94,19 @@ pub async fn latest(State(state): State<AppState>) -> ApiResult<Json<BlockRespon
 /// The path segment is parsed as an unsigned integer explicitly so that
 /// malformed input returns the standard JSON error envelope rather than
 /// Axum's default `Path` extractor rejection.
+#[utoipa::path(
+    get,
+    path = "/v1/blocks/{number}",
+    tag = "blocks",
+    params(
+        ("number" = i64, Path, description = "Block number (non-negative integer).")
+    ),
+    responses(
+        (status = 200, description = "Block found", body = BlockResponse),
+        (status = 400, description = "Path segment is not a valid block number", body = ErrorEnvelope),
+        (status = 404, description = "Block not indexed", body = ErrorEnvelope),
+    ),
+)]
 pub async fn by_number(
     State(state): State<AppState>,
     Path(raw): Path<String>,

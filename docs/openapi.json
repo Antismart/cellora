@@ -1,0 +1,667 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Cellora REST API",
+    "description": "Read-only REST API over indexed CKB data.",
+    "contact": {
+      "name": "Cellora contributors"
+    },
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/blocks/latest": {
+      "get": {
+        "tags": [
+          "blocks"
+        ],
+        "summary": "Handler for `GET /v1/blocks/latest`.",
+        "operationId": "latest",
+        "responses": {
+          "200": {
+            "description": "Highest indexed block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No blocks indexed yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/blocks/{number}": {
+      "get": {
+        "tags": [
+          "blocks"
+        ],
+        "summary": "Handler for `GET /v1/blocks/:number`.",
+        "description": "The path segment is parsed as an unsigned integer explicitly so that\nmalformed input returns the standard JSON error envelope rather than\nAxum's default `Path` extractor rejection.",
+        "operationId": "by_number",
+        "parameters": [
+          {
+            "name": "number",
+            "in": "path",
+            "description": "Block number (non-negative integer).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Block found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path segment is not a valid block number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Block not indexed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cells": {
+      "get": {
+        "tags": [
+          "cells"
+        ],
+        "summary": "Handler for `GET /v1/cells`.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "lock_hash",
+            "in": "query",
+            "description": "Script hash of the cell's lock. One of `lock_hash` or `type_hash`\nmust be supplied.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type_hash",
+            "in": "query",
+            "description": "Script hash of the cell's type. One of `lock_hash` or `type_hash`\nmust be supplied.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_live",
+            "in": "query",
+            "description": "Filter on liveness. Omit to return both live and consumed cells.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Requested page size. Capped by `CELLORA_API_MAX_PAGE_SIZE`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "include_data",
+            "in": "query",
+            "description": "Include the raw `data` blob on each returned cell. Default false.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of matching cells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CellsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cursor is malformed or tampered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Handler for `GET /v1/health`. Always returns 200; used for liveness.",
+        "operationId": "liveness",
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Handler for `GET /v1/health/ready`. Returns 200 when the database pool\nanswers, 503 otherwise. The response body names the failing dependency.",
+        "operationId": "readiness",
+        "responses": {
+          "200": {
+            "description": "All dependencies reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more dependencies unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/stats": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Handler for `GET /v1/stats`.",
+        "operationId": "stats",
+        "responses": {
+          "200": {
+            "description": "Current indexer / node tip snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BlockResponse": {
+        "type": "object",
+        "description": "Wire-format shape of a single block.",
+        "required": [
+          "number",
+          "hash",
+          "parent_hash",
+          "timestamp_ms",
+          "epoch",
+          "transactions_count",
+          "proposals_count",
+          "uncles_count",
+          "nonce",
+          "dao",
+          "indexed_at"
+        ],
+        "properties": {
+          "dao": {
+            "type": "string",
+            "description": "Nervos DAO field.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "epoch": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Epoch encoded as CKB packs it (length/index/number bitfield)."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Block hash (0x-prefixed 32-byte hex string).",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "indexed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When Cellora first observed this block."
+          },
+          "nonce": {
+            "type": "string",
+            "description": "Raw nonce, rendered as a decimal string."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block number."
+          },
+          "parent_hash": {
+            "type": "string",
+            "description": "Parent block hash.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "proposals_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of proposals in the block."
+          },
+          "timestamp_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block timestamp in milliseconds since the Unix epoch."
+          },
+          "transactions_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of transactions in the block."
+          },
+          "uncles_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of uncles attached to the block."
+          }
+        }
+      },
+      "CellResponse": {
+        "type": "object",
+        "description": "Wire-format shape of a single cell.",
+        "required": [
+          "tx_hash",
+          "output_index",
+          "block_number",
+          "block_hash",
+          "capacity_shannons",
+          "lock",
+          "lock_hash",
+          "is_live"
+        ],
+        "properties": {
+          "block_hash": {
+            "type": "string",
+            "description": "Hash of that block. Lets a client cross-check without a second\nround-trip.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "block_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block in which the cell was created."
+          },
+          "capacity_shannons": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cell capacity in shannons (1 CKB = 1e8 shannons)."
+          },
+          "consumed_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ConsumedByResponse",
+                "description": "Details of the spend, `None` when the cell is live."
+              }
+            ]
+          },
+          "data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw cell data. Present only when `include_data=true`.",
+            "example": "0xdeadbeef"
+          },
+          "is_live": {
+            "type": "boolean",
+            "description": "`true` when the cell has not been consumed."
+          },
+          "lock": {
+            "$ref": "#/components/schemas/ScriptResponse",
+            "description": "Lock script."
+          },
+          "lock_hash": {
+            "type": "string",
+            "description": "Precomputed hash of the lock script.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "output_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index of this output within the producing transaction's outputs."
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "Hash of the transaction that produced this cell.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScriptResponse",
+                "description": "Type script, or `None` when the cell has no type script."
+              }
+            ]
+          },
+          "type_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Precomputed hash of the type script, or `None`."
+          }
+        }
+      },
+      "CellsPage": {
+        "type": "object",
+        "description": "Response envelope for a single page of cells.",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CellResponse"
+            },
+            "description": "Cells returned by this page, ordered newest first."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMeta",
+            "description": "Page-level metadata."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor to fetch the next page, or `None` when this is the\nfinal page."
+          }
+        }
+      },
+      "ConsumedByResponse": {
+        "type": "object",
+        "description": "Where a cell was consumed. `None` for live cells.",
+        "required": [
+          "tx_hash",
+          "input_index",
+          "block_number"
+        ],
+        "properties": {
+          "block_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Block the consuming transaction landed in."
+          },
+          "input_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Index into that transaction's `inputs` array."
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "Hash of the consuming transaction.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Inner structure of an [`ErrorEnvelope`].",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code — `bad_request`, `not_found`,\n`invalid_cursor`, `upstream_unavailable`, `internal`."
+          },
+          "details": {
+            "description": "Optional structured extra context. Always `null` today."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of the failure."
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "Wire-format body for an error response.\n\nEvery error reaching the HTTP boundary is rendered as this envelope.\nThe shape is deliberately narrow — `code` for programmatic handling,\n`message` for humans, optional `details` reserved for structured extra\ncontext when a future endpoint needs it.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody",
+            "description": "Single-field container holding the error description."
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "Response body for the liveness endpoint.",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always the literal string `\"ok\"`."
+          },
+          "version": {
+            "type": "string",
+            "description": "`cellora-api` crate version."
+          }
+        }
+      },
+      "PageMeta": {
+        "type": "object",
+        "description": "Page-level metadata attached to every list response.",
+        "properties": {
+          "indexer_tip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Highest block number Cellora has indexed, or `None` on a fresh DB."
+          },
+          "node_tip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Last tip reported by the upstream CKB node, or `None` when the\ntip-refresh task has not yet observed the node.",
+            "minimum": 0
+          }
+        }
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "description": "Response body for the readiness endpoint.",
+        "required": [
+          "status",
+          "db"
+        ],
+        "properties": {
+          "db": {
+            "type": "string",
+            "description": "`\"ok\"` or an error message, for the Postgres pool."
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"ready\"` when all dependencies succeeded, `\"not_ready\"` otherwise."
+          }
+        }
+      },
+      "ScriptResponse": {
+        "type": "object",
+        "description": "CKB script projected onto the wire format.",
+        "required": [
+          "code_hash",
+          "hash_type",
+          "args"
+        ],
+        "properties": {
+          "args": {
+            "type": "string",
+            "description": "Variable-length `args` buffer.",
+            "example": "0xdeadbeef"
+          },
+          "code_hash": {
+            "type": "string",
+            "description": "The 32-byte `code_hash` of the script.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "hash_type": {
+            "type": "string",
+            "description": "`hash_type` — one of `data`, `type`, `data1`, `data2`.",
+            "example": "type"
+          }
+        }
+      },
+      "StatsResponse": {
+        "type": "object",
+        "description": "Wire-format shape of `/v1/stats`.",
+        "required": [
+          "snapshot_age_seconds",
+          "is_stale"
+        ],
+        "properties": {
+          "indexer_tip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Highest block number Cellora has ingested, or `None` on a fresh DB."
+          },
+          "is_stale": {
+            "type": "boolean",
+            "description": "`true` when the snapshot is older than the internal staleness\nthreshold — usually means the refresh task can't reach the node\nor the database."
+          },
+          "lag_blocks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`node_tip − indexer_tip` when both are known."
+          },
+          "node_tip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Last tip block number the CKB node returned.",
+            "minimum": 0
+          },
+          "snapshot_age_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Age of the snapshot (seconds since it was observed). Lets clients\ntell a lagging indexer from a dead one.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes."
+    },
+    {
+      "name": "blocks",
+      "description": "Indexed block lookups."
+    },
+    {
+      "name": "cells",
+      "description": "Paginated cell queries by lock or type hash."
+    },
+    {
+      "name": "stats",
+      "description": "Indexer progress and lag."
+    }
+  ]
+}

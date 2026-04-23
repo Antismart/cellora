@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
@@ -21,24 +22,33 @@ use crate::state::AppState;
 const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Response body for the liveness endpoint.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     /// Always the literal string `"ok"`.
+    #[schema(value_type = String)]
     pub status: &'static str,
     /// `cellora-api` crate version.
+    #[schema(value_type = String)]
     pub version: &'static str,
 }
 
 /// Response body for the readiness endpoint.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ReadyResponse {
     /// `"ready"` when all dependencies succeeded, `"not_ready"` otherwise.
+    #[schema(value_type = String)]
     pub status: &'static str,
     /// `"ok"` or an error message, for the Postgres pool.
     pub db: String,
 }
 
 /// Handler for `GET /v1/health`. Always returns 200; used for liveness.
+#[utoipa::path(
+    get,
+    path = "/v1/health",
+    tag = "health",
+    responses((status = 200, description = "Service is up", body = HealthResponse)),
+)]
 pub async fn liveness() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
@@ -48,6 +58,15 @@ pub async fn liveness() -> Json<HealthResponse> {
 
 /// Handler for `GET /v1/health/ready`. Returns 200 when the database pool
 /// answers, 503 otherwise. The response body names the failing dependency.
+#[utoipa::path(
+    get,
+    path = "/v1/health/ready",
+    tag = "health",
+    responses(
+        (status = 200, description = "All dependencies reachable", body = ReadyResponse),
+        (status = 503, description = "One or more dependencies unreachable", body = ReadyResponse),
+    ),
+)]
 pub async fn readiness(State(state): State<AppState>) -> impl IntoResponse {
     match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.db)

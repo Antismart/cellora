@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 /// Convenience alias for handler return types.
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -94,16 +95,27 @@ impl From<cellora_db::DbError> for ApiError {
 }
 
 /// Wire-format body for an error response.
-#[derive(Debug, Serialize)]
-struct ErrorEnvelope<'a> {
-    error: ErrorBody<'a>,
+///
+/// Every error reaching the HTTP boundary is rendered as this envelope.
+/// The shape is deliberately narrow — `code` for programmatic handling,
+/// `message` for humans, optional `details` reserved for structured extra
+/// context when a future endpoint needs it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorEnvelope {
+    /// Single-field container holding the error description.
+    pub error: ErrorBody,
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorBody<'a> {
-    code: &'a str,
-    message: String,
-    details: Option<serde_json::Value>,
+/// Inner structure of an [`ErrorEnvelope`].
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorBody {
+    /// Stable machine-readable code — `bad_request`, `not_found`,
+    /// `invalid_cursor`, `upstream_unavailable`, `internal`.
+    pub code: String,
+    /// Human-readable description of the failure.
+    pub message: String,
+    /// Optional structured extra context. Always `null` today.
+    pub details: Option<serde_json::Value>,
 }
 
 impl IntoResponse for ApiError {
@@ -119,7 +131,7 @@ impl IntoResponse for ApiError {
 
         let body = ErrorEnvelope {
             error: ErrorBody {
-                code: self.code(),
+                code: self.code().to_owned(),
                 message: self.public_message(),
                 details: None,
             },

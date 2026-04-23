@@ -862,3 +862,67 @@ async fn cells_meta_reads_tip_from_tracker() {
     assert_eq!(body["meta"]["indexer_tip"], 50);
     assert_eq!(body["meta"]["node_tip"], 52);
 }
+
+// ---------------------------------------------------------------------------
+// OpenAPI spec + drift check
+// ---------------------------------------------------------------------------
+
+/// Locate `docs/openapi.json` from the crate's `CARGO_MANIFEST_DIR`.
+fn committed_spec_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("docs")
+        .join("openapi.json")
+}
+
+/// Drift check for the committed OpenAPI spec.
+///
+/// `cargo test -p cellora-api openapi_spec_is_current` fails when the
+/// spec in the code has drifted from the committed file. To regenerate,
+/// run `UPDATE_OPENAPI=1 cargo test -p cellora-api openapi_spec_is_current`.
+#[test]
+fn openapi_spec_is_current() {
+    let live = format!("{}\n", cellora_api::openapi::spec_json());
+    let path = committed_spec_path();
+
+    if std::env::var("UPDATE_OPENAPI").is_ok() {
+        std::fs::create_dir_all(path.parent().expect("parent dir")).expect("mkdir docs");
+        std::fs::write(&path, &live).expect("write openapi.json");
+        return;
+    }
+
+    let committed = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!(
+            "docs/openapi.json missing ({err}); regenerate with UPDATE_OPENAPI=1 cargo test \
+             -p cellora-api openapi_spec_is_current"
+        );
+    });
+    assert_eq!(
+        committed, live,
+        "docs/openapi.json is out of date; regenerate with UPDATE_OPENAPI=1 cargo test \
+         -p cellora-api openapi_spec_is_current"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn openapi_endpoint_serves_the_spec() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/openapi.json"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["info"]["title"], "Cellora REST API");
+    assert!(body["paths"]["/v1/health"].is_object());
+    assert!(body["paths"]["/v1/cells"].is_object());
+    assert!(body["paths"]["/v1/stats"].is_object());
+}

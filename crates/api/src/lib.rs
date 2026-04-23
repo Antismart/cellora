@@ -19,6 +19,7 @@
 
 pub mod error;
 pub mod hex;
+pub mod openapi;
 pub mod pagination;
 pub mod routes;
 pub mod state;
@@ -85,9 +86,20 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
         .route("/v1/stats", get(routes::stats::stats))
+        .route("/v1/openapi.json", get(openapi_handler))
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(middleware)
         .with_state(state)
+}
+
+/// Serve the OpenAPI specification. Kept outside the normal `routes`
+/// module because the spec is both code-derived and self-referential — it
+/// describes the handlers that sit next to it.
+async fn openapi_handler() -> impl IntoResponse {
+    (
+        [("content-type", "application/json")],
+        openapi::spec_json(),
+    )
 }
 
 /// Annotate every 2xx response with the indexer's tip height. Responses

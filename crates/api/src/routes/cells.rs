@@ -22,14 +22,16 @@ use axum::Json;
 use cellora_db::cells::{self, CellCursor, LivenessFilter};
 use cellora_db::models::Cell;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult, ErrorEnvelope};
 use crate::hex::{self as hex_helper, Hex, Hex32};
 use crate::pagination::{decode_cells_cursor, encode_cells_cursor};
 use crate::state::AppState;
 
 /// Incoming query-string parameters for `GET /v1/cells`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct CellsQuery {
     /// Script hash of the cell's lock. One of `lock_hash` or `type_hash`
     /// must be supplied.
@@ -49,7 +51,7 @@ pub struct CellsQuery {
 }
 
 /// Response envelope for a single page of cells.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CellsPage {
     /// Cells returned by this page, ordered newest first.
     pub data: Vec<CellResponse>,
@@ -61,7 +63,7 @@ pub struct CellsPage {
 }
 
 /// Page-level metadata attached to every list response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PageMeta {
     /// Highest block number Cellora has indexed, or `None` on a fresh DB.
     pub indexer_tip: Option<i64>,
@@ -71,20 +73,24 @@ pub struct PageMeta {
 }
 
 /// CKB script projected onto the wire format.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ScriptResponse {
     /// The 32-byte `code_hash` of the script.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub code_hash: Hex32,
     /// `hash_type` — one of `data`, `type`, `data1`, `data2`.
+    #[schema(value_type = String, example = "type")]
     pub hash_type: &'static str,
     /// Variable-length `args` buffer.
+    #[schema(value_type = String, example = "0xdeadbeef")]
     pub args: Hex,
 }
 
 /// Where a cell was consumed. `None` for live cells.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ConsumedByResponse {
     /// Hash of the consuming transaction.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub tx_hash: Hex32,
     /// Index into that transaction's `inputs` array.
     pub input_index: i32,
@@ -93,9 +99,10 @@ pub struct ConsumedByResponse {
 }
 
 /// Wire-format shape of a single cell.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CellResponse {
     /// Hash of the transaction that produced this cell.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub tx_hash: Hex32,
     /// Index of this output within the producing transaction's outputs.
     pub output_index: i32,
@@ -103,20 +110,24 @@ pub struct CellResponse {
     pub block_number: i64,
     /// Hash of that block. Lets a client cross-check without a second
     /// round-trip.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub block_hash: Hex32,
     /// Cell capacity in shannons (1 CKB = 1e8 shannons).
     pub capacity_shannons: i64,
     /// Lock script.
     pub lock: ScriptResponse,
     /// Precomputed hash of the lock script.
+    #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub lock_hash: Hex32,
     /// Type script, or `None` when the cell has no type script.
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
     /// Precomputed hash of the type script, or `None`.
+    #[schema(value_type = Option<String>)]
     pub type_hash: Option<Hex32>,
     /// Raw cell data. Present only when `include_data=true`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, example = "0xdeadbeef")]
     pub data: Option<Hex>,
     /// `true` when the cell has not been consumed.
     pub is_live: bool,
@@ -125,6 +136,17 @@ pub struct CellResponse {
 }
 
 /// Handler for `GET /v1/cells`.
+#[utoipa::path(
+    get,
+    path = "/v1/cells",
+    tag = "cells",
+    params(CellsQuery),
+    responses(
+        (status = 200, description = "Page of matching cells", body = CellsPage),
+        (status = 400, description = "Invalid query parameters", body = ErrorEnvelope),
+        (status = 400, description = "Cursor is malformed or tampered", body = ErrorEnvelope),
+    ),
+)]
 pub async fn list(
     State(state): State<AppState>,
     Query(params): Query<CellsQuery>,

@@ -7,11 +7,12 @@
 use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
 /// Wire-format shape of `/v1/stats`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct StatsResponse {
     /// Highest block number Cellora has ingested, or `None` on a fresh DB.
     pub indexer_tip: Option<i64>,
@@ -29,6 +30,12 @@ pub struct StatsResponse {
 }
 
 /// Handler for `GET /v1/stats`.
+#[utoipa::path(
+    get,
+    path = "/v1/stats",
+    tag = "stats",
+    responses((status = 200, description = "Current indexer / node tip snapshot", body = StatsResponse)),
+)]
 pub async fn stats(State(state): State<AppState>) -> Json<StatsResponse> {
     let snap = state.tip.get();
     let snapshot_age_seconds = snap.observed_monotonic.elapsed().as_secs();
