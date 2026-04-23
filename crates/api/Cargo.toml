@@ -1,0 +1,47 @@
+[package]
+name = "cellora-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Read-only REST API over indexed CKB data."
+default-run = "cellora-api"
+
+[lints]
+workspace = true
+
+[lib]
+name = "cellora_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cellora-api"
+path = "src/main.rs"
+
+[dependencies]
+cellora-common = { path = "../common" }
+cellora-db = { path = "../db" }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+dotenvy = { workspace = true }
+
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+http = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sqlx = { workspace = true }
+http-body-util = { workspace = true }

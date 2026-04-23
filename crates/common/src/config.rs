@@ -38,6 +38,22 @@ pub struct Config {
     /// Log output format.
     #[serde(default)]
     pub log_format: LogFormat,
+
+    /// Socket address the API binary binds to (e.g. `0.0.0.0:8080`).
+    #[serde(default = "default_api_bind_addr")]
+    pub api_bind_addr: String,
+    /// Default page size applied when a request does not specify `limit`.
+    #[serde(default = "default_api_default_page_size")]
+    pub api_default_page_size: u32,
+    /// Upper bound on `limit` accepted from clients.
+    #[serde(default = "default_api_max_page_size")]
+    pub api_max_page_size: u32,
+    /// Per-request timeout enforced by the HTTP middleware stack.
+    #[serde(default = "default_api_request_timeout_ms")]
+    pub api_request_timeout_ms: u64,
+    /// Refresh interval for the cached `(indexer_tip, node_tip)` snapshot.
+    #[serde(default = "default_api_tip_cache_refresh_ms")]
+    pub api_tip_cache_refresh_ms: u64,
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -46,6 +62,26 @@ fn default_poll_interval_ms() -> u64 {
 
 fn default_log_level() -> String {
     "info".to_owned()
+}
+
+fn default_api_bind_addr() -> String {
+    "0.0.0.0:8080".to_owned()
+}
+
+fn default_api_default_page_size() -> u32 {
+    50
+}
+
+fn default_api_max_page_size() -> u32 {
+    500
+}
+
+fn default_api_request_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_api_tip_cache_refresh_ms() -> u64 {
+    1_000
 }
 
 impl Config {

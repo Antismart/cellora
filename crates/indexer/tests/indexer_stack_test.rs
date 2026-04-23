@@ -96,6 +96,11 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         indexer_start_block: 0,
         log_level: "warn".into(),
         log_format: LogFormat::Pretty,
+        api_bind_addr: "0.0.0.0:0".into(),
+        api_default_page_size: 50,
+        api_max_page_size: 500,
+        api_request_timeout_ms: 10_000,
+        api_tip_cache_refresh_ms: 1_000,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);
