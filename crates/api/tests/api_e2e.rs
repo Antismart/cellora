@@ -13,11 +13,14 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{header::HeaderName, Request, StatusCode};
+use bigdecimal::BigDecimal;
 use cellora_api::{build_app, AppState};
 use cellora_common::config::{Config, LogFormat};
-use cellora_db::{connect, migrate};
+use cellora_db::models::BlockRow;
+use cellora_db::{blocks, connect, migrate};
 use http_body_util::BodyExt;
 use serde_json::Value;
+use sqlx::PgPool;
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
@@ -28,6 +31,7 @@ const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
 struct Harness {
     app: axum::Router,
+    pool: PgPool,
     // Keep the container alive for the lifetime of the test.
     _pg: ContainerAsync<Postgres>,
 }
@@ -46,9 +50,31 @@ async fn up() -> Harness {
     migrate::run(&pool).await.expect("migrate");
 
     let config = test_config(&url);
-    let state = AppState::new(pool, config);
+    let state = AppState::new(pool.clone(), config);
     let app = build_app(state);
-    Harness { app, _pg: pg }
+    Harness { app, pool, _pg: pg }
+}
+
+/// Build a deterministic test block with the given number. Hashes derive
+/// from `seed` so distinct fixtures don't collide on the `hash` unique
+/// constraint.
+fn make_block(number: i64, seed: u8) -> BlockRow {
+    BlockRow {
+        number,
+        hash: vec![seed; 32],
+        parent_hash: vec![seed.wrapping_sub(1); 32],
+        timestamp_ms: 1_700_000_000_000 + number * 1_000,
+        epoch: number,
+        transactions_count: 1,
+        proposals_count: 0,
+        uncles_count: 0,
+        nonce: BigDecimal::from(12345 + number),
+        dao: vec![0xaa; 32],
+    }
+}
+
+async fn seed_block(pool: &PgPool, row: &BlockRow) {
+    blocks::insert(pool, row).await.expect("insert block");
 }
 
 async fn connect_with_retry(url: &str, attempts: u8) -> sqlx::PgPool {
@@ -189,4 +215,109 @@ async fn unknown_route_returns_404() {
         .expect("serve request");
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_latest_returns_404_on_empty_database() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/latest"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_latest_returns_highest_numbered_block() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(0, 0x10)).await;
+    seed_block(&harness.pool, &make_block(7, 0x20)).await;
+    seed_block(&harness.pool, &make_block(3, 0x30)).await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/latest"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["number"], 7);
+    let hash = body["hash"].as_str().expect("hash is a string");
+    assert!(hash.starts_with("0x"));
+    assert_eq!(hash.len(), 66, "32 bytes -> 64 hex chars + 0x prefix");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_by_number_returns_requested_block() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(42, 0xab)).await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/42"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["number"], 42);
+    assert_eq!(body["transactions_count"], 1);
+    assert!(body["indexed_at"].is_string(), "indexed_at is RFC3339");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_by_number_returns_404_on_unknown_number() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/999999"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_by_number_rejects_non_numeric_path() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/abc"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn blocks_by_number_rejects_negative_path() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/-1"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
 }

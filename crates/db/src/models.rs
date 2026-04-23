@@ -1,6 +1,7 @@
 //! Row structs that mirror the database schema one-to-one.
 
 use bigdecimal::BigDecimal;
+use chrono::{DateTime, Utc};
 
 /// Raw encoding of a CKB script `hash_type` field.
 ///
@@ -27,7 +28,9 @@ impl HashType {
     }
 }
 
-/// One row in the `blocks` table.
+/// Write-side shape of a `blocks` row. Ingestion code builds this and hands
+/// it to [`crate::blocks::insert`]; `indexed_at` is populated by the column
+/// default so it is deliberately absent here.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Default)]
 pub struct BlockRow {
@@ -41,6 +44,25 @@ pub struct BlockRow {
     pub uncles_count: i32,
     pub nonce: BigDecimal,
     pub dao: Vec<u8>,
+}
+
+/// Read-side shape of a `blocks` row, including the server-populated
+/// `indexed_at` timestamp. Returned by [`crate::blocks::latest`] and
+/// [`crate::blocks::get_by_number`].
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub number: i64,
+    pub hash: Vec<u8>,
+    pub parent_hash: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub epoch: i64,
+    pub transactions_count: i32,
+    pub proposals_count: i32,
+    pub uncles_count: i32,
+    pub nonce: BigDecimal,
+    pub dao: Vec<u8>,
+    pub indexed_at: DateTime<Utc>,
 }
 
 /// One row in the `transactions` table.

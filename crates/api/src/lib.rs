@@ -18,6 +18,7 @@
 //!    database connection open indefinitely.
 
 pub mod error;
+pub mod hex;
 pub mod routes;
 pub mod state;
 
@@ -71,6 +72,8 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/v1/health", get(routes::health::liveness))
         .route("/v1/health/ready", get(routes::health::readiness))
+        .route("/v1/blocks/latest", get(routes::blocks::latest))
+        .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .layer(middleware)
         .with_state(state)
 }

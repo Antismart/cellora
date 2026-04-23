@@ -38,6 +38,7 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 http = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -45,3 +46,4 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sqlx = { workspace = true }
 http-body-util = { workspace = true }
+bigdecimal = { workspace = true }
