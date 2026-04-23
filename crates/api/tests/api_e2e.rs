@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{header::HeaderName, Request, StatusCode};
+use std::time::{Instant, SystemTime};
+
 use bigdecimal::BigDecimal;
+use cellora_api::tip::{TipSnapshot, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::config::{Config, LogFormat};
 use cellora_db::models::{BlockRow, CellRow, ConsumedCellRef, HashType};
@@ -32,6 +35,7 @@ const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 struct Harness {
     app: axum::Router,
     pool: PgPool,
+    tip: TipTracker,
     // Keep the container alive for the lifetime of the test.
     _pg: ContainerAsync<Postgres>,
 }
@@ -50,9 +54,24 @@ async fn up() -> Harness {
     migrate::run(&pool).await.expect("migrate");
 
     let config = test_config(&url);
-    let state = AppState::new(pool.clone(), config);
+    let tip = TipTracker::new();
+    let state = AppState::with_tip(pool.clone(), config, tip.clone());
     let app = build_app(state);
-    Harness { app, pool, _pg: pg }
+    Harness {
+        app,
+        pool,
+        tip,
+        _pg: pg,
+    }
+}
+
+fn fresh_tip(indexer_tip: Option<i64>, node_tip: Option<u64>) -> TipSnapshot {
+    TipSnapshot {
+        indexer_tip,
+        node_tip,
+        observed_at: SystemTime::now(),
+        observed_monotonic: Instant::now(),
+    }
 }
 
 /// Build a deterministic test block with the given number. Hashes derive
@@ -720,4 +739,126 @@ async fn cells_by_type_hash_returns_matching_cells() {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["type_hash"], hex_prefixed(&TYPE_A));
     assert_eq!(data[0]["type"]["hash_type"], "data1");
+}
+
+// ---------------------------------------------------------------------------
+// /v1/stats + tip headers
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_returns_cached_tip_snapshot() {
+    let harness = up().await;
+    harness.tip.set(fresh_tip(Some(99), Some(102)));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/stats"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["indexer_tip"], 99);
+    assert_eq!(body["node_tip"], 102);
+    assert_eq!(body["lag_blocks"], 3);
+    assert_eq!(body["is_stale"], false);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_reports_stale_snapshot_on_empty_tracker() {
+    let harness = up().await;
+    // No tip set — the tracker still holds its empty placeholder.
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/stats"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert!(body["indexer_tip"].is_null());
+    assert!(body["node_tip"].is_null());
+    assert_eq!(body["is_stale"], true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tip_header_is_set_on_success_when_tip_is_known() {
+    let harness = up().await;
+    harness.tip.set(fresh_tip(Some(17), Some(20)));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let tip = response
+        .headers()
+        .get("x-indexer-tip")
+        .expect("tip header present")
+        .to_str()
+        .expect("ascii");
+    assert_eq!(tip, "17");
+    assert!(response.headers().get("x-indexer-tip-stale").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tip_stale_header_appears_when_snapshot_is_empty() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-indexer-tip").is_none());
+    let stale = response
+        .headers()
+        .get("x-indexer-tip-stale")
+        .expect("stale header present")
+        .to_str()
+        .expect("ascii");
+    assert_eq!(stale, "true");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tip_header_absent_on_error_responses() {
+    let harness = up().await;
+    harness.tip.set(fresh_tip(Some(17), Some(20)));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/abc"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response.headers().get("x-indexer-tip").is_none(),
+        "tip header must not leak onto error responses"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_meta_reads_tip_from_tracker() {
+    let harness = up().await;
+    harness.tip.set(fresh_tip(Some(50), Some(52)));
+
+    let uri = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+    let body = read_json(
+        harness
+            .app
+            .clone()
+            .oneshot(get(&uri))
+            .await
+            .expect("serve request")
+            .into_body(),
+    )
+    .await;
+    assert_eq!(body["meta"]["indexer_tip"], 50);
+    assert_eq!(body["meta"]["node_tip"], 52);
 }

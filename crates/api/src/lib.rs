@@ -22,11 +22,14 @@ pub mod hex;
 pub mod pagination;
 pub mod routes;
 pub mod state;
+pub mod tip;
 
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{header::HeaderName, Request, Response, StatusCode};
+use axum::extract::State;
+use axum::http::{header::HeaderName, HeaderValue, Request, Response, StatusCode};
+use axum::middleware::{from_fn_with_state, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -47,6 +50,11 @@ pub use state::AppState;
 
 /// HTTP header used to correlate requests and responses.
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+/// HTTP header naming the indexer's tip height at response time.
+const TIP_HEADER: HeaderName = HeaderName::from_static("x-indexer-tip");
+/// HTTP header set when the cached tip snapshot is older than the
+/// internal staleness threshold.
+const TIP_STALE_HEADER: HeaderName = HeaderName::from_static("x-indexer-tip-stale");
 
 /// Build the top-level [`axum::Router`] with every route and middleware
 /// attached. Handed to the test harness and to `main.rs` alike.
@@ -76,8 +84,35 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/blocks/latest", get(routes::blocks::latest))
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
+        .route("/v1/stats", get(routes::stats::stats))
+        .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(middleware)
         .with_state(state)
+}
+
+/// Annotate every 2xx response with the indexer's tip height. Responses
+/// served on a stale snapshot additionally carry `X-Indexer-Tip-Stale`.
+/// Non-2xx responses are untouched so error envelopes stay minimal.
+async fn tip_headers(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    let mut response = next.run(request).await;
+    if response.status().is_success() {
+        let snap = state.tip.get();
+        if let Some(tip) = snap.indexer_tip {
+            if let Ok(value) = HeaderValue::try_from(tip.to_string()) {
+                response.headers_mut().insert(TIP_HEADER.clone(), value);
+            }
+        }
+        if snap.is_stale() {
+            response
+                .headers_mut()
+                .insert(TIP_STALE_HEADER.clone(), HeaderValue::from_static("true"));
+        }
+    }
+    response
 }
 
 /// Span factory used by [`TraceLayer`]. Captures the request method, matched

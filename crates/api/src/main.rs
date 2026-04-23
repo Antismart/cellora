@@ -8,13 +8,16 @@
 //! - Serve until SIGINT / SIGTERM, then shut down gracefully.
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use anyhow::Context;
+use cellora_api::tip::{spawn_refresh_task, TipTracker};
 use cellora_api::{build_app, AppState};
-use cellora_common::{config::Config, logging};
+use cellora_common::{ckb::CkbClient, config::Config, logging};
 use cellora_db::connect;
 use tokio::net::TcpListener;
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 #[tokio::main]
@@ -28,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
     info!(
         version = env!("CARGO_PKG_VERSION"),
         bind_addr = %config.api_bind_addr,
+        tip_refresh_ms = config.api_tip_cache_refresh_ms,
         "cellora api starting",
     );
 
@@ -35,12 +39,25 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect to postgres")?;
 
+    let ckb = CkbClient::new(config.ckb_rpc_url.clone()).context("construct ckb client")?;
+
     let bind_addr: SocketAddr = config
         .api_bind_addr
         .parse()
         .with_context(|| format!("parse bind address '{}'", config.api_bind_addr))?;
 
-    let state = AppState::new(pool, config);
+    let refresh_interval = Duration::from_millis(config.api_tip_cache_refresh_ms);
+    let tip = TipTracker::new();
+    let cancel = CancellationToken::new();
+    let refresh_handle = spawn_refresh_task(
+        tip.clone(),
+        pool.clone(),
+        ckb,
+        refresh_interval,
+        cancel.clone(),
+    );
+
+    let state = AppState::with_tip(pool, config, tip);
     let app = build_app(state);
 
     let listener = TcpListener::bind(bind_addr)
@@ -49,11 +66,18 @@ async fn main() -> anyhow::Result<()> {
 
     info!(addr = %bind_addr, "cellora api listening");
 
-    axum::serve(listener, app)
+    let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .context("serve http")?;
+        .context("serve http");
 
+    // Stop the refresh task and wait for it to drain before exiting.
+    cancel.cancel();
+    if let Err(err) = refresh_handle.await {
+        tracing::warn!(error = %err, "tip refresh task join failure");
+    }
+
+    serve_result?;
     info!("cellora api stopped cleanly");
     Ok(())
 }

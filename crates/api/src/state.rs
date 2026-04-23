@@ -9,6 +9,8 @@ use std::sync::Arc;
 use cellora_common::config::Config;
 use sqlx::PgPool;
 
+use crate::tip::TipTracker;
+
 /// Application state injected into every handler.
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -16,14 +18,30 @@ pub struct AppState {
     pub db: PgPool,
     /// Shared runtime configuration.
     pub config: Arc<Config>,
+    /// Lock-free view of the latest indexer / node tip snapshot.
+    pub tip: TipTracker,
 }
 
 impl AppState {
-    /// Build a new [`AppState`] from an existing pool and config.
+    /// Build a new [`AppState`] with a fresh (empty) [`TipTracker`].
+    /// The tracker remains empty until the refresh task spawned by
+    /// `cellora_api::tip::spawn_refresh_task` publishes a snapshot.
     pub fn new(db: PgPool, config: Config) -> Self {
         Self {
             db,
             config: Arc::new(config),
+            tip: TipTracker::new(),
+        }
+    }
+
+    /// Build a state with a caller-supplied tracker. Used by tests that
+    /// want to poke a snapshot in before issuing requests, and by main
+    /// when the tracker needs to be shared with the refresh task.
+    pub fn with_tip(db: PgPool, config: Config, tip: TipTracker) -> Self {
+        Self {
+            db,
+            config: Arc::new(config),
+            tip,
         }
     }
 }

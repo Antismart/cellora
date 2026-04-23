@@ -60,12 +60,14 @@ pub struct CellsPage {
     pub meta: PageMeta,
 }
 
-/// Page-level metadata attached to every list response. Today it carries
-/// the indexer's tip; later slices will add `node_tip` and a lag figure.
+/// Page-level metadata attached to every list response.
 #[derive(Debug, Serialize)]
 pub struct PageMeta {
     /// Highest block number Cellora has indexed, or `None` on a fresh DB.
     pub indexer_tip: Option<i64>,
+    /// Last tip reported by the upstream CKB node, or `None` when the
+    /// tip-refresh task has not yet observed the node.
+    pub node_tip: Option<u64>,
 }
 
 /// CKB script projected onto the wire format.
@@ -149,14 +151,15 @@ pub async fn list(
     };
 
     let (page, next_cursor) = build_page(cells, limit, params.include_data)?;
-    let indexer_tip = cellora_db::checkpoint::read(&state.db)
-        .await?
-        .map(|c| c.last_indexed_block);
+    let snap = state.tip.get();
 
     Ok(Json(CellsPage {
         data: page,
         next_cursor,
-        meta: PageMeta { indexer_tip },
+        meta: PageMeta {
+            indexer_tip: snap.indexer_tip,
+            node_tip: snap.node_tip,
+        },
     }))
 }
 
