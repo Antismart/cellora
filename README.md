@@ -58,7 +58,11 @@ curl -s http://localhost:8080/v1/health        | jq
 curl -s http://localhost:8080/v1/health/ready  | jq
 curl -s http://localhost:8080/v1/blocks/latest | jq
 curl -s http://localhost:8080/v1/blocks/0      | jq
+curl -s "http://localhost:8080/v1/cells?lock_hash=0x$(printf 'aa%.0s' {1..32})" | jq
+curl -s http://localhost:8080/v1/stats         | jq
 ```
+
+See [`docs/api.md`](./docs/api.md) for every endpoint, query parameter, cursor-based pagination example, and error shape. The OpenAPI specification lives at [`docs/openapi.json`](./docs/openapi.json) and is also served at `/v1/openapi.json`.
 
 `Ctrl-C` triggers graceful shutdown on either binary. The indexer finishes any in-flight block, advances the checkpoint, and exits zero; the API drains in-flight requests before closing the listener.
 
@@ -142,6 +146,8 @@ cellora/
 └── docs/
     ├── architecture.md
     ├── architecture-overview.md
+    ├── api.md
+    ├── openapi.json
     └── decisions/
         └── 0001-crate-boundaries.md
 ```
@@ -158,4 +164,12 @@ cellora/
 
 ## License
 
-Apache-2.0.
+Source-available under the [Functional Source License, Version 1.1, with Apache 2.0 future grant](./LICENSE.md) (**FSL-1.1-ALv2**).
+
+In plain language:
+
+- **Read, modify, self-host** — permitted for internal use, non-commercial research, and professional services to third parties.
+- **Compete by offering Cellora-as-a-service** — not permitted while the license is in effect.
+- Each release automatically converts to Apache-2.0 two years after it ships.
+
+See [`LICENSE.md`](./LICENSE.md) for the full terms.

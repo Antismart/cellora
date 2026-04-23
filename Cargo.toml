@@ -11,7 +11,10 @@ members = [
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
-license = "Apache-2.0"
+# Functional Source License, Version 1.1, with Apache-2.0 future license.
+# See LICENSE.md at the repository root for the full terms. Non-SPDX, so we
+# point cargo at the file rather than the identifier.
+license-file = "LICENSE.md"
 repository = "https://github.com/antismart/cellora"
 authors = ["Cellora contributors"]
 

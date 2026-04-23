@@ -24,7 +24,7 @@ use crate::routes::stats::StatsResponse;
     info(
         title = "Cellora REST API",
         description = "Read-only REST API over indexed CKB data.",
-        license(name = "Apache-2.0"),
+        license(name = "FSL-1.1-ALv2"),
     ),
     paths(
         crate::routes::health::liveness,
