@@ -2,23 +2,24 @@
 
 Production-grade, multi-tenant SaaS indexer for the [Nervos CKB](https://www.nervos.org) blockchain. Cellora exposes indexed on-chain data (blocks, transactions, cells) via REST and GraphQL APIs, so DApp teams can query CKB without running their own indexing infrastructure.
 
-> **Status:** Week 1 of a 7-week build-out (see [`CLAUDE.md`](./CLAUDE.md) for the roadmap). This drop lands the Cargo workspace, the docker-compose dev stack, the initial schema, and a block-ingestion service that polls a CKB node and writes blocks, transactions, and cells to Postgres. APIs, authentication, webhooks, billing, and the dashboard are in later weeks — they are intentionally not here yet.
+> **Status:** Week 2 of a 7-week build-out. Week 1 shipped the Cargo workspace, the docker-compose dev stack, the initial schema, and a block-ingestion service that polls a CKB node and writes blocks, transactions, and cells to Postgres. Week 2 introduces the REST API crate; today it serves health and blocks endpoints, with cells, stats, and an OpenAPI spec landing across the remaining Week 2 slices. GraphQL, authentication, webhooks, billing, and the dashboard are in later weeks.
 
 ## Architecture at a glance
 
 ```
-┌───────────┐     poll    ┌───────────────┐    tx commit    ┌────────────┐
-│  CKB node │ ─────────── │  indexer svc  │ ──────────────▶ │ PostgreSQL │
-└───────────┘             └───────────────┘                 └────────────┘
-                                │
-                                └── graceful shutdown on SIGINT / SIGTERM
+┌───────────┐   poll    ┌───────────────┐   tx commit   ┌────────────┐   read   ┌────────┐
+│  CKB node │ ───────── │  indexer svc  │ ────────────▶ │ PostgreSQL │ ◀─────── │ api    │ ◀── HTTP
+└───────────┘           └───────────────┘               └────────────┘          │ svc    │
+                              │                                                 └────────┘
+                              └── graceful shutdown on SIGINT / SIGTERM
 ```
 
 - **`crates/common`** — configuration, structured logging, CKB JSON-RPC client.
 - **`crates/db`** — SQLx-backed repositories for blocks, transactions, cells, and the indexer checkpoint.
-- **`crates/indexer`** — the service binary that ties the two together and runs the poll loop.
+- **`crates/indexer`** — the service binary that runs the poll loop and writes to Postgres.
+- **`crates/api`** — the REST service binary. Reads from the same Postgres and serves clients over HTTP.
 
-See [`docs/architecture.md`](./docs/architecture.md) for the full Week 1 walkthrough.
+See [`docs/architecture.md`](./docs/architecture.md) for the Week 1 walkthrough and [`docs/architecture-overview.md`](./docs/architecture-overview.md) for the end-state design.
 
 ## Requirements
 
@@ -38,16 +39,28 @@ scripts/dev-up.sh
 
 # 3. run the indexer
 cargo run -p cellora-indexer
+
+# 4. in a second terminal, run the API
+cargo run -p cellora-api
 ```
 
-You should see structured logs as the indexer pulls blocks from the dev node:
+The indexer emits structured logs as it pulls blocks from the dev node:
 
 ```
 INFO cellora_indexer::poller: indexed block block=0 hash=… txs=2 cells=11 consumed=1 elapsed_ms=53
 INFO cellora_indexer::poller: indexed block block=1 hash=… txs=1 cells=0 consumed=0 elapsed_ms=2
 ```
 
-`Ctrl-C` triggers graceful shutdown — the indexer finishes any in-flight block, advances the checkpoint, and exits zero.
+The API binds by default to `0.0.0.0:8080`. Once it is running:
+
+```bash
+curl -s http://localhost:8080/v1/health        | jq
+curl -s http://localhost:8080/v1/health/ready  | jq
+curl -s http://localhost:8080/v1/blocks/latest | jq
+curl -s http://localhost:8080/v1/blocks/0      | jq
+```
+
+`Ctrl-C` triggers graceful shutdown on either binary. The indexer finishes any in-flight block, advances the checkpoint, and exits zero; the API drains in-flight requests before closing the listener.
 
 ### Verifying what landed
 
@@ -71,10 +84,15 @@ Every setting is environment-driven (figment loads from `.env` in dev and real e
 | `CELLORA_INDEXER_START_BLOCK` | `0` | Block to start indexing from on a fresh DB |
 | `CELLORA_LOG_LEVEL` | `info` | `tracing` `EnvFilter` expression |
 | `CELLORA_LOG_FORMAT` | `json` | `json` (prod) or `pretty` (local) |
+| `CELLORA_API_BIND_ADDR` | `0.0.0.0:8080` | Socket the API binary binds to |
+| `CELLORA_API_DEFAULT_PAGE_SIZE` | `50` | Page size applied when a request omits `limit` |
+| `CELLORA_API_MAX_PAGE_SIZE` | `500` | Upper bound on `limit` accepted from clients |
+| `CELLORA_API_REQUEST_TIMEOUT_MS` | `10000` | Per-request timeout enforced by the middleware stack |
+| `CELLORA_API_TIP_CACHE_REFRESH_MS` | `1000` | Refresh interval for the cached `(indexer_tip, node_tip)` snapshot |
 
 ## Running the tests
 
-The test suite has three layers, each runnable on its own:
+The test suite has four layers, each runnable on its own:
 
 ```bash
 # 1. Pure parser unit tests — no containers, fast, CI-safe.
@@ -83,9 +101,13 @@ cargo test -p cellora-indexer --test parser_test
 # 2. DB integration — spins up Postgres via testcontainers (requires docker).
 cargo test -p cellora-db --test db_integration
 
-# 3. Full-stack end-to-end — wiremock stands in for the CKB node while the
-#    real poller writes into a testcontainers Postgres.
+# 3. Full-stack end-to-end for the indexer — wiremock stands in for the CKB
+#    node while the real poller writes into a testcontainers Postgres.
 cargo test -p cellora-indexer --test indexer_stack_test
+
+# 4. API end-to-end — builds the full Axum router against a testcontainers
+#    Postgres and drives it with tower::ServiceExt::oneshot (no socket).
+cargo test -p cellora-api
 
 # Or run everything at once:
 cargo test --workspace
@@ -115,24 +137,24 @@ cellora/
 ├── crates/
 │   ├── common/                     # config, logging, CKB client
 │   ├── db/                         # schema-aware repositories
-│   └── indexer/                    # block poller binary
+│   ├── indexer/                    # block poller binary
+│   └── api/                        # REST API binary
 └── docs/
     ├── architecture.md
+    ├── architecture-overview.md
     └── decisions/
         └── 0001-crate-boundaries.md
 ```
 
 ## Roadmap
 
-Full weekly scope in [`CLAUDE.md`](./CLAUDE.md). At a glance:
-
-1. **Week 1** — workspace, docker-compose, ingestion pipeline ← *current*
-2. **Week 2** — REST API + OpenAPI
-3. **Week 3** — API-key auth, Redis rate limiting, GraphQL
-4. **Week 4** — reorg handling, Prometheus metrics, Grafana, OpenTelemetry
-5. **Week 5** — dashboard (React + Vite + Tailwind) with GitHub OAuth
-6. **Week 6** — webhooks and GraphQL subscriptions
-7. **Week 7** — Stripe billing, partitioning, Kubernetes deployment
+1. **Week 1** — workspace, docker-compose, ingestion pipeline.
+2. **Week 2** — REST API + OpenAPI ← *current*.
+3. **Week 3** — API-key auth, Redis rate limiting, GraphQL.
+4. **Week 4** — reorg handling, Prometheus metrics, Grafana, OpenTelemetry.
+5. **Week 5** — dashboard (React + Vite + Tailwind) with GitHub OAuth.
+6. **Week 6** — webhooks and GraphQL subscriptions.
+7. **Week 7** — Stripe billing, partitioning, Kubernetes deployment.
 
 ## License
 
