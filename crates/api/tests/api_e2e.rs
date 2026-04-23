@@ -16,8 +16,8 @@ use axum::http::{header::HeaderName, Request, StatusCode};
 use bigdecimal::BigDecimal;
 use cellora_api::{build_app, AppState};
 use cellora_common::config::{Config, LogFormat};
-use cellora_db::models::BlockRow;
-use cellora_db::{blocks, connect, migrate};
+use cellora_db::models::{BlockRow, CellRow, ConsumedCellRef, HashType};
+use cellora_db::{blocks, cells, connect, migrate};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -75,6 +75,48 @@ fn make_block(number: i64, seed: u8) -> BlockRow {
 
 async fn seed_block(pool: &PgPool, row: &BlockRow) {
     blocks::insert(pool, row).await.expect("insert block");
+}
+
+/// Build a single cell with a deterministic shape. `lock_hash` and
+/// `type_hash` are controllable so tests can target specific scripts.
+fn make_cell(
+    block_number: i64,
+    tx_seed: u8,
+    output_index: i32,
+    lock_hash: [u8; 32],
+    type_hash: Option<[u8; 32]>,
+) -> CellRow {
+    CellRow {
+        tx_hash: vec![tx_seed; 32],
+        output_index,
+        block_number,
+        capacity_shannons: 100 * 100_000_000 + i64::from(output_index),
+        lock_code_hash: vec![0x01; 32],
+        lock_hash_type: HashType::Type,
+        lock_args: vec![tx_seed, 0x01, 0x02],
+        lock_hash: lock_hash.to_vec(),
+        type_code_hash: type_hash.map(|_| vec![0x02; 32]),
+        type_hash_type: type_hash.map(|_| HashType::Data1),
+        type_args: type_hash.map(|_| vec![tx_seed, 0x03]),
+        type_hash: type_hash.map(|t| t.to_vec()),
+        data: vec![tx_seed; 8],
+    }
+}
+
+async fn seed_cells(pool: &PgPool, rows: &[CellRow]) {
+    let mut tx = pool.begin().await.expect("begin tx");
+    cells::insert_batch(&mut tx, rows)
+        .await
+        .expect("insert cells");
+    tx.commit().await.expect("commit tx");
+}
+
+async fn seed_consumed(pool: &PgPool, refs: &[ConsumedCellRef]) {
+    let mut tx = pool.begin().await.expect("begin tx");
+    cells::mark_consumed(&mut tx, refs)
+        .await
+        .expect("mark consumed");
+    tx.commit().await.expect("commit tx");
 }
 
 async fn connect_with_retry(url: &str, attempts: u8) -> sqlx::PgPool {
@@ -320,4 +362,362 @@ async fn blocks_by_number_rejects_negative_path() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = read_json(response.into_body()).await;
     assert_eq!(body["error"]["code"], "bad_request");
+}
+
+// ---------------------------------------------------------------------------
+// /v1/cells
+// ---------------------------------------------------------------------------
+
+const LOCK_A: [u8; 32] = [0xaa; 32];
+const LOCK_B: [u8; 32] = [0xbb; 32];
+const TYPE_A: [u8; 32] = [0xcc; 32];
+
+fn hex_prefixed(bytes: &[u8]) -> String {
+    let mut buf = String::with_capacity(2 + bytes.len() * 2);
+    buf.push_str("0x");
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut buf, "{byte:02x}");
+    }
+    buf
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_requires_exactly_one_filter() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/cells"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+
+    let uri = format!(
+        "/v1/cells?lock_hash={}&type_hash={}",
+        hex_prefixed(&LOCK_A),
+        hex_prefixed(&TYPE_A)
+    );
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_rejects_invalid_lock_hash() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/cells?lock_hash=not-hex"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_returns_empty_page_on_unknown_lock() {
+    let harness = up().await;
+    let uri = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert!(body["data"].as_array().unwrap().is_empty());
+    assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_by_lock_hash_returns_matching_cells() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+
+    let cells_fixture = vec![
+        make_cell(10, 0x11, 0, LOCK_A, Some(TYPE_A)),
+        make_cell(10, 0x22, 0, LOCK_B, None),
+        make_cell(10, 0x11, 1, LOCK_A, None),
+    ];
+    seed_cells(&harness.pool, &cells_fixture).await;
+
+    let uri = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+
+    let data = body["data"].as_array().expect("array");
+    assert_eq!(data.len(), 2);
+    for cell in data {
+        assert_eq!(cell["lock_hash"], hex_prefixed(&LOCK_A));
+        assert_eq!(cell["is_live"], true);
+        assert_eq!(cell["block_number"], 10);
+        assert_eq!(cell["block_hash"], hex_prefixed(&[0x10u8; 32]));
+        assert_eq!(cell["lock"]["hash_type"], "type");
+        assert!(cell["data"].is_null(), "data omitted by default");
+    }
+    assert!(body["meta"]["indexer_tip"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_include_data_toggle() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+    seed_cells(
+        &harness.pool,
+        &[make_cell(10, 0x11, 0, LOCK_A, Some(TYPE_A))],
+    )
+    .await;
+
+    let uri = format!(
+        "/v1/cells?lock_hash={}&include_data=true",
+        hex_prefixed(&LOCK_A)
+    );
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    let data = body["data"].as_array().expect("array");
+    assert_eq!(data.len(), 1);
+    let hex = data[0]["data"].as_str().expect("data present");
+    assert!(hex.starts_with("0x"));
+    assert_eq!(hex.len(), 2 + 8 * 2, "8 bytes -> 16 hex chars + prefix");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_is_live_filter() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+    seed_block(&harness.pool, &make_block(11, 0x11)).await;
+
+    let live = make_cell(10, 0x11, 0, LOCK_A, None);
+    let dead = make_cell(10, 0x22, 0, LOCK_A, None);
+    seed_cells(&harness.pool, &[live.clone(), dead.clone()]).await;
+    seed_consumed(
+        &harness.pool,
+        &[ConsumedCellRef {
+            tx_hash: dead.tx_hash.clone(),
+            output_index: dead.output_index,
+            consumed_by_tx_hash: vec![0x99; 32],
+            consumed_by_input_index: 0,
+            consumed_at_block_number: 11,
+        }],
+    )
+    .await;
+
+    let base = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+
+    let only_live = read_json(
+        harness
+            .app
+            .clone()
+            .oneshot(get(&format!("{base}&is_live=true")))
+            .await
+            .expect("serve")
+            .into_body(),
+    )
+    .await;
+    let live_ids: Vec<_> = only_live["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["tx_hash"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(live_ids, vec![hex_prefixed(&live.tx_hash)]);
+
+    let only_dead = read_json(
+        harness
+            .app
+            .clone()
+            .oneshot(get(&format!("{base}&is_live=false")))
+            .await
+            .expect("serve")
+            .into_body(),
+    )
+    .await;
+    let dead_ids: Vec<_> = only_dead["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["tx_hash"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(dead_ids, vec![hex_prefixed(&dead.tx_hash)]);
+    assert_eq!(only_dead["data"][0]["is_live"], false);
+    assert_eq!(
+        only_dead["data"][0]["consumed_by"]["tx_hash"],
+        hex_prefixed(&[0x99u8; 32])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_pagination_returns_every_row_exactly_once() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+    seed_block(&harness.pool, &make_block(11, 0x11)).await;
+    seed_block(&harness.pool, &make_block(12, 0x12)).await;
+
+    // 7 cells matching LOCK_A spread across three blocks / seeds.
+    let cells_fixture: Vec<CellRow> = [
+        (10, 0x01, 0),
+        (10, 0x01, 1),
+        (10, 0x02, 0),
+        (11, 0x03, 0),
+        (11, 0x03, 1),
+        (12, 0x04, 0),
+        (12, 0x05, 0),
+    ]
+    .iter()
+    .map(|(bn, seed, oi)| make_cell(*bn, *seed, *oi, LOCK_A, None))
+    .collect();
+    seed_cells(&harness.pool, &cells_fixture).await;
+
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut iteration = 0;
+
+    loop {
+        iteration += 1;
+        assert!(iteration <= 10, "pagination did not terminate");
+
+        let mut uri = format!("/v1/cells?lock_hash={}&limit=3", hex_prefixed(&LOCK_A));
+        if let Some(c) = cursor.as_deref() {
+            uri.push_str(&format!("&cursor={c}"));
+        }
+        let body = read_json(
+            harness
+                .app
+                .clone()
+                .oneshot(get(&uri))
+                .await
+                .expect("serve")
+                .into_body(),
+        )
+        .await;
+
+        let page = body["data"].as_array().expect("array").clone();
+        for cell in &page {
+            let key = (
+                cell["block_number"].as_i64().unwrap(),
+                cell["tx_hash"].as_str().unwrap().to_owned(),
+                cell["output_index"].as_i64().unwrap() as i32,
+            );
+            seen.push(key);
+        }
+
+        match body["next_cursor"].as_str() {
+            Some(c) if !c.is_empty() => {
+                assert!(page.len() <= 3, "page exceeds requested limit");
+                cursor = Some(c.to_owned());
+            }
+            _ => break,
+        }
+    }
+
+    assert_eq!(seen.len(), 7, "every cell returned exactly once");
+    // Results are newest-first; first row should be block 12 / seed 0x05.
+    assert_eq!(seen.first().unwrap().0, 12);
+    // Each key is unique.
+    let mut sorted = seen.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), seen.len(), "duplicates across pages");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_rejects_invalid_cursor() {
+    let harness = up().await;
+    let uri = format!(
+        "/v1/cells?lock_hash={}&cursor=not-a-real-cursor",
+        hex_prefixed(&LOCK_A)
+    );
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "invalid_cursor");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_rejects_limit_above_max() {
+    let harness = up().await;
+    let uri = format!("/v1/cells?lock_hash={}&limit=99999", hex_prefixed(&LOCK_A));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_rejects_limit_zero() {
+    let harness = up().await;
+    let uri = format!("/v1/cells?lock_hash={}&limit=0", hex_prefixed(&LOCK_A));
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_by_type_hash_returns_matching_cells() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+    seed_cells(
+        &harness.pool,
+        &[
+            make_cell(10, 0x11, 0, LOCK_A, Some(TYPE_A)),
+            make_cell(10, 0x22, 0, LOCK_B, None),
+        ],
+    )
+    .await;
+
+    let uri = format!("/v1/cells?type_hash={}", hex_prefixed(&TYPE_A));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get(&uri))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    let data = body["data"].as_array().expect("array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["type_hash"], hex_prefixed(&TYPE_A));
+    assert_eq!(data[0]["type"]["hash_type"], "data1");
 }

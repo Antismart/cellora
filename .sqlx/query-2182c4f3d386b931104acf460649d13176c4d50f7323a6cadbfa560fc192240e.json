@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            c.tx_hash,\n            c.output_index,\n            c.block_number,\n            b.hash AS block_hash,\n            c.capacity_shannons,\n            c.lock_code_hash,\n            c.lock_hash_type,\n            c.lock_args,\n            c.lock_hash,\n            c.type_code_hash,\n            c.type_hash_type,\n            c.type_args,\n            c.type_hash,\n            c.data,\n            c.consumed_by_tx_hash,\n            c.consumed_by_input_index,\n            c.consumed_at_block_number\n        FROM cells c\n        INNER JOIN blocks b ON b.number = c.block_number\n        WHERE c.lock_hash = $1\n          AND ($2::boolean IS NULL OR (c.consumed_by_tx_hash IS NULL) = $2)\n          AND ($3::bigint IS NULL\n               OR (c.block_number, c.tx_hash, c.output_index) < ($3, $4::bytea, $5::integer))\n        ORDER BY c.block_number DESC, c.tx_hash DESC, c.output_index DESC\n        LIMIT $6\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tx_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "output_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "block_number",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "block_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "capacity_shannons",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "lock_code_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "lock_hash_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "lock_args",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 8,
+        "name": "lock_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 9,
+        "name": "type_code_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 10,
+        "name": "type_hash_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 11,
+        "name": "type_args",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 12,
+        "name": "type_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 13,
+        "name": "data",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 14,
+        "name": "consumed_by_tx_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 15,
+        "name": "consumed_by_input_index",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "consumed_at_block_number",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bool",
+        "Int8",
+        "Bytea",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "2182c4f3d386b931104acf460649d13176c4d50f7323a6cadbfa560fc192240e"
+}

@@ -63,6 +63,8 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "timeout", "request-id", "catch-panic", "util"] }
 http = "1"
 http-body-util = "0.1"
+base64 = "0.22"
+arc-swap = "1"
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [

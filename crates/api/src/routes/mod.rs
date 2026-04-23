@@ -5,4 +5,5 @@
 //! repository layer and in helpers on this crate.
 
 pub mod blocks;
+pub mod cells;
 pub mod health;

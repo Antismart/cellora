@@ -80,7 +80,9 @@ pub struct TransactionRow {
     pub outputs_count: i32,
 }
 
-/// One row in the `cells` table.
+/// Write-side shape of a `cells` row. Ingestion code builds this and hands
+/// it to [`crate::cells::insert_batch`]; consumed / indexed metadata is
+/// populated separately.
 #[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct CellRow {
@@ -97,6 +99,31 @@ pub struct CellRow {
     pub type_args: Option<Vec<u8>>,
     pub type_hash: Option<Vec<u8>>,
     pub data: Vec<u8>,
+}
+
+/// Read-side shape of a `cells` row, joined with the hash of the block in
+/// which the cell was created. `lock_hash_type` / `type_hash_type` are kept
+/// as raw `i16`; callers map them to [`HashType`] at the API boundary.
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct Cell {
+    pub tx_hash: Vec<u8>,
+    pub output_index: i32,
+    pub block_number: i64,
+    pub block_hash: Vec<u8>,
+    pub capacity_shannons: i64,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
+    pub lock_hash: Vec<u8>,
+    pub type_code_hash: Option<Vec<u8>>,
+    pub type_hash_type: Option<i16>,
+    pub type_args: Option<Vec<u8>>,
+    pub type_hash: Option<Vec<u8>>,
+    pub data: Vec<u8>,
+    pub consumed_by_tx_hash: Option<Vec<u8>>,
+    pub consumed_by_input_index: Option<i32>,
+    pub consumed_at_block_number: Option<i64>,
 }
 
 /// A pointer from a transaction input to a cell it consumes.

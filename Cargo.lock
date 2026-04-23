@@ -313,11 +313,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bigdecimal",
  "cellora-common",
  "cellora-db",
  "chrono",
  "dotenvy",
+ "hex",
  "http",
  "http-body-util",
  "serde",

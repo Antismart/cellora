@@ -55,16 +55,60 @@ impl From<[u8; 32]> for Hex32 {
 
 impl Serialize for Hex32 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // "0x" + 64 hex chars
-        let mut buf = String::with_capacity(66);
-        buf.push_str("0x");
-        for byte in self.0 {
-            use std::fmt::Write;
-            // write! on a String never fails
-            let _ = write!(&mut buf, "{byte:02x}");
-        }
-        serializer.serialize_str(&buf)
+        serializer.serialize_str(&encode_prefixed(&self.0))
     }
+}
+
+/// Variable-length byte sequence, serialised as a `0x`-prefixed lowercase
+/// hex string. Used for script `args`, cell `data`, and anywhere else CKB
+/// returns a `Bytes` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hex(Vec<u8>);
+
+impl Hex {
+    /// Wrap a byte vector.
+    pub const fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the underlying bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for Hex {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Serialize for Hex {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&encode_prefixed(&self.0))
+    }
+}
+
+/// Write a `0x`-prefixed lowercase hex string into a new `String`. The
+/// buffer is preallocated to the final length so serialisation is a single
+/// allocation.
+fn encode_prefixed(bytes: &[u8]) -> String {
+    let mut buf = String::with_capacity(2 + bytes.len() * 2);
+    buf.push_str("0x");
+    for byte in bytes {
+        use std::fmt::Write;
+        // write! on a String never fails.
+        let _ = write!(&mut buf, "{byte:02x}");
+    }
+    buf
+}
+
+/// Parse a `0x`-prefixed hex string into bytes. Returns `None` when the
+/// prefix is missing or the body is not valid hex. Callers turn this into
+/// an [`ApiError::BadRequest`] when the input came from a client.
+pub fn decode_prefixed(input: &str) -> Option<Vec<u8>> {
+    let body = input.strip_prefix("0x")?;
+    ::hex::decode(body).ok()
 }
 
 #[cfg(test)]
@@ -91,5 +135,25 @@ mod tests {
         assert!(Hex32::try_from_slice(&[0; 31]).is_err());
         assert!(Hex32::try_from_slice(&[0; 33]).is_err());
         assert!(Hex32::try_from_slice(&[0; 32]).is_ok());
+    }
+
+    #[test]
+    fn hex_serializes_variable_length() {
+        let empty: Hex = Vec::<u8>::new().into();
+        assert_eq!(serde_json::to_string(&empty).unwrap(), "\"0x\"");
+
+        let bytes: Hex = vec![0xde, 0xad, 0xbe, 0xef].into();
+        assert_eq!(serde_json::to_string(&bytes).unwrap(), "\"0xdeadbeef\"");
+    }
+
+    #[test]
+    fn decode_prefixed_round_trips() {
+        assert_eq!(
+            decode_prefixed("0xdeadbeef"),
+            Some(vec![0xde, 0xad, 0xbe, 0xef])
+        );
+        assert_eq!(decode_prefixed("0x"), Some(Vec::new()));
+        assert_eq!(decode_prefixed("deadbeef"), None);
+        assert_eq!(decode_prefixed("0xzz"), None);
     }
 }

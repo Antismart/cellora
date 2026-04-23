@@ -19,6 +19,7 @@
 
 pub mod error;
 pub mod hex;
+pub mod pagination;
 pub mod routes;
 pub mod state;
 
@@ -74,6 +75,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/health/ready", get(routes::health::readiness))
         .route("/v1/blocks/latest", get(routes::blocks::latest))
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
+        .route("/v1/cells", get(routes::cells::list))
         .layer(middleware)
         .with_state(state)
 }
