@@ -20,6 +20,7 @@
 pub mod admin;
 pub mod auth;
 pub mod error;
+pub mod graphql;
 pub mod hex;
 pub mod keys;
 pub mod openapi;
@@ -88,28 +89,74 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/health/ready", get(routes::health::readiness))
         .route("/v1/openapi.json", get(openapi_handler));
 
-    // The auth and rate-limit layers sit only on this sub-router. Public
-    // routes live in a separate `Router` that never composes with them,
-    // so there is no path branch inside the middleware to get wrong.
+    // The auth and rate-limit layers sit only on these sub-routers.
+    // Public routes live in a separate `Router` that never composes with
+    // them, so there is no path branch inside the middleware to get
+    // wrong. REST and GraphQL each have their own rate-limit middleware
+    // because the surface (and therefore bucket key + tier params) is
+    // fixed per-router.
     //
     // Layer order: requests flow through the layer added LAST first, so
     // listing the rate limiter first and auth second means
     // `auth → rate_limit → handler`. Auth must run first because the
     // rate-limit middleware reads the `AuthenticatedKey` it inserts.
-    let authenticated = Router::new()
+    let rest = Router::new()
         .route("/v1/blocks/latest", get(routes::blocks::latest))
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
         .route("/v1/stats", get(routes::stats::stats))
-        .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(from_fn_with_state(state.clone(), rate_limit_rest))
+        .layer(from_fn_with_state(state.clone(), auth::middleware));
+
+    let graphql_schema = graphql::build_schema(state.clone());
+    let graphql_router = Router::new()
+        .route("/graphql", axum::routing::post(graphql_handler))
+        .layer(axum::Extension(graphql_schema))
+        .layer(from_fn_with_state(state.clone(), rate_limit_graphql))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
 
     Router::new()
         .merge(public)
-        .merge(authenticated)
+        .merge(rest)
+        .merge(graphql_router)
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(middleware)
         .with_state(state)
+}
+
+/// Wire-format shape of a GraphQL request body. Mirrors the standard
+/// `application/json` shape used by every GraphQL client.
+#[derive(serde::Deserialize)]
+struct GraphQlRequestBody {
+    query: String,
+    #[serde(default)]
+    variables: Option<serde_json::Value>,
+    #[serde(default, rename = "operationName")]
+    operation_name: Option<String>,
+}
+
+/// GraphQL POST handler. We avoid the optional `async-graphql-axum`
+/// integration crate because it locks us to a specific axum version;
+/// `async-graphql::Schema::execute` accepts a `Request` we can build
+/// directly from the JSON body.
+async fn graphql_handler(
+    axum::Extension(schema): axum::Extension<graphql::ApiSchema>,
+    Json(body): Json<GraphQlRequestBody>,
+) -> Response<Body> {
+    let mut req = async_graphql::Request::new(body.query);
+    if let Some(variables) = body.variables {
+        req = req.variables(async_graphql::Variables::from_json(variables));
+    }
+    if let Some(name) = body.operation_name {
+        req = req.operation_name(name);
+    }
+    let response = schema.execute(req).await;
+    let payload = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .body(Body::from(payload))
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response())
 }
 
 /// Serve the OpenAPI specification. Kept outside the normal `routes`
@@ -130,16 +177,34 @@ const RATELIMIT_RESET_HEADER: HeaderName = HeaderName::from_static("x-ratelimit-
 /// Standard `Retry-After` header set on 429 responses.
 const RETRY_AFTER_HEADER: HeaderName = HeaderName::from_static("retry-after");
 
-/// Rate-limit middleware. Reads the [`auth::AuthenticatedKey`] that
+/// Rate-limit middleware for the REST surface.
+async fn rate_limit_rest(
+    state: State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    rate_limit_for(state, request, next, ratelimit::Surface::Rest).await
+}
+
+/// Rate-limit middleware for the GraphQL surface.
+async fn rate_limit_graphql(
+    state: State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    rate_limit_for(state, request, next, ratelimit::Surface::Graphql).await
+}
+
+/// Shared rate-limit logic. Reads the [`auth::AuthenticatedKey`] that
 /// `auth::middleware` placed in request extensions, asks the limiter for
-/// a decision, and either annotates the response or returns 429.
-///
-/// The bearer-side bookkeeping (auth resolution, cache) is on the inner
-/// layer; this middleware does no DB work.
-async fn rate_limit_middleware(
+/// a decision against the supplied `surface`, and either annotates the
+/// response or returns 429. Bearer resolution / verification cache live
+/// on the inner auth layer; this middleware does no DB work.
+async fn rate_limit_for(
     State(state): State<AppState>,
     request: Request<Body>,
     next: Next,
+    surface: ratelimit::Surface,
 ) -> Response<Body> {
     let key = match request
         .extensions()
@@ -157,19 +222,15 @@ async fn rate_limit_middleware(
     };
 
     let Some(limiter) = state.rate_limiter.as_ref() else {
-        // No limiter configured — fail open. Logged once per request at
-        // DEBUG so operators can spot prolonged misconfiguration.
+        // No limiter configured — fail open. Logged at DEBUG so
+        // operators can spot prolonged misconfiguration.
         tracing::debug!(prefix = %key.prefix, "rate limiter unavailable, allowing");
         return next.run(request).await;
     };
 
-    let params =
-        ratelimit::LimitParams::from_config(&state.config, key.tier, ratelimit::Surface::Rest);
+    let params = ratelimit::LimitParams::from_config(&state.config, key.tier, surface);
 
-    let decision = match limiter
-        .check(&key.prefix, ratelimit::Surface::Rest, params)
-        .await
-    {
+    let decision = match limiter.check(&key.prefix, surface, params).await {
         Ok(d) => d,
         Err(err) => {
             if limiter.fails_open() {

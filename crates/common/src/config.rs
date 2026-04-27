@@ -94,6 +94,25 @@ pub struct Config {
     /// Pro-tier REST refill rate, tokens per second.
     #[serde(default = "default_pro_rest_refill")]
     pub api_rate_limit_pro_rest_refill_per_sec: f64,
+
+    /// Free-tier GraphQL burst capacity.
+    #[serde(default = "default_free_graphql_burst")]
+    pub api_rate_limit_free_graphql_burst: u32,
+    /// Free-tier GraphQL refill rate, tokens per second.
+    #[serde(default = "default_free_graphql_refill")]
+    pub api_rate_limit_free_graphql_refill_per_sec: f64,
+    /// Starter-tier GraphQL burst capacity.
+    #[serde(default = "default_starter_graphql_burst")]
+    pub api_rate_limit_starter_graphql_burst: u32,
+    /// Starter-tier GraphQL refill rate, tokens per second.
+    #[serde(default = "default_starter_graphql_refill")]
+    pub api_rate_limit_starter_graphql_refill_per_sec: f64,
+    /// Pro-tier GraphQL burst capacity.
+    #[serde(default = "default_pro_graphql_burst")]
+    pub api_rate_limit_pro_graphql_burst: u32,
+    /// Pro-tier GraphQL refill rate, tokens per second.
+    #[serde(default = "default_pro_graphql_refill")]
+    pub api_rate_limit_pro_graphql_refill_per_sec: f64,
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -157,6 +176,25 @@ fn default_pro_rest_burst() -> u32 {
 }
 fn default_pro_rest_refill() -> f64 {
     200.0
+}
+
+fn default_free_graphql_burst() -> u32 {
+    10
+}
+fn default_free_graphql_refill() -> f64 {
+    0.5
+}
+fn default_starter_graphql_burst() -> u32 {
+    100
+}
+fn default_starter_graphql_refill() -> f64 {
+    10.0
+}
+fn default_pro_graphql_burst() -> u32 {
+    1_000
+}
+fn default_pro_graphql_refill() -> f64 {
+    100.0
 }
 
 impl Config {

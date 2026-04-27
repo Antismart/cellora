@@ -281,6 +281,12 @@ fn test_config(database_url: &str) -> Config {
         api_rate_limit_starter_rest_refill_per_sec: 20.0,
         api_rate_limit_pro_rest_burst: 3_000,
         api_rate_limit_pro_rest_refill_per_sec: 200.0,
+        api_rate_limit_free_graphql_burst: 10,
+        api_rate_limit_free_graphql_refill_per_sec: 0.5,
+        api_rate_limit_starter_graphql_burst: 100,
+        api_rate_limit_starter_graphql_refill_per_sec: 10.0,
+        api_rate_limit_pro_graphql_burst: 1_000,
+        api_rate_limit_pro_graphql_refill_per_sec: 100.0,
     }
 }
 
@@ -1138,6 +1144,119 @@ async fn public_routes_remain_accessible_without_auth() {
             response.status()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// GraphQL
+// ---------------------------------------------------------------------------
+
+fn graphql_post(query: &str, bearer: Option<&str>) -> Request<Body> {
+    let body = serde_json::json!({ "query": query }).to_string();
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json");
+    if let Some(b) = bearer {
+        builder = builder.header("authorization", format!("Bearer {b}"));
+    }
+    builder
+        .body(Body::from(body))
+        .expect("build graphql request")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graphql_blocks_latest_query() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(1, 0xab)).await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(graphql_post(
+            "{ blocksLatest { number hash } }",
+            Some(&harness.bearer),
+        ))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["data"]["blocksLatest"]["number"], 1);
+    let hash = body["data"]["blocksLatest"]["hash"]
+        .as_str()
+        .expect("hash string");
+    assert!(hash.starts_with("0x"));
+    assert_eq!(hash.len(), 66);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graphql_cells_query_paginates_consistently_with_rest() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(10, 0x10)).await;
+    seed_cells(
+        &harness.pool,
+        &[
+            make_cell(10, 0x11, 0, LOCK_A, None),
+            make_cell(10, 0x22, 0, LOCK_A, None),
+        ],
+    )
+    .await;
+
+    let query = format!(
+        r#"{{ cells(input: {{ lockHash: "{}", limit: 10 }}) {{ data {{ txHash blockNumber blockHash isLive }} nextCursor meta {{ indexerTip nodeTip }} }} }}"#,
+        hex_prefixed(&LOCK_A)
+    );
+    let response = harness
+        .app
+        .clone()
+        .oneshot(graphql_post(&query, Some(&harness.bearer)))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    let data = body["data"]["cells"]["data"].as_array().expect("array");
+    assert_eq!(data.len(), 2);
+    for cell in data {
+        assert_eq!(cell["isLive"], true);
+        assert_eq!(cell["blockNumber"], 10);
+        assert_eq!(cell["blockHash"], hex_prefixed(&[0x10u8; 32]));
+    }
+    assert!(body["data"]["cells"]["nextCursor"].is_null());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graphql_requires_bearer_authentication() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(graphql_post("{ stats { isStale } }", None))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn graphql_validates_input_filters() {
+    let harness = up().await;
+
+    // Neither lockHash nor typeHash supplied — resolver returns a
+    // GraphQL error envelope, not the REST envelope.
+    let response = harness
+        .app
+        .clone()
+        .oneshot(graphql_post(
+            "{ cells(input: {}) { nextCursor } }",
+            Some(&harness.bearer),
+        ))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert!(
+        body["errors"].is_array(),
+        "expected GraphQL errors array, got {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -111,6 +111,12 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         api_rate_limit_starter_rest_refill_per_sec: 20.0,
         api_rate_limit_pro_rest_burst: 3_000,
         api_rate_limit_pro_rest_refill_per_sec: 200.0,
+        api_rate_limit_free_graphql_burst: 10,
+        api_rate_limit_free_graphql_refill_per_sec: 0.5,
+        api_rate_limit_starter_graphql_burst: 100,
+        api_rate_limit_starter_graphql_refill_per_sec: 10.0,
+        api_rate_limit_pro_graphql_burst: 1_000,
+        api_rate_limit_pro_graphql_refill_per_sec: 100.0,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);

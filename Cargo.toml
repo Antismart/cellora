@@ -74,6 +74,7 @@ rand = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 moka = { version = "0.12", features = ["future"] }
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+async-graphql = { version = "7", features = ["chrono"] }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [

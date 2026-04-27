@@ -84,8 +84,7 @@ return { allowed, math.floor(tokens), retry_after_ms }
 pub enum Surface {
     /// REST endpoints under `/v1/`.
     Rest,
-    /// GraphQL endpoint at `/graphql` (lands in slice 4).
-    #[allow(dead_code)]
+    /// GraphQL endpoint at `/graphql`.
     Graphql,
 }
 
@@ -111,22 +110,32 @@ pub struct LimitParams {
 
 impl LimitParams {
     /// Resolve the limit for the given tier on the given surface from
-    /// the global [`Config`]. GraphQL constants land in slice 4; until
-    /// then the GraphQL surface mirrors the REST limits.
+    /// the global [`Config`].
     pub fn from_config(config: &Config, tier: ApiKeyTier, surface: Surface) -> Self {
-        let _ = surface; // GraphQL-specific limits land with the GraphQL surface itself.
-        match tier {
-            ApiKeyTier::Free => Self {
+        match (surface, tier) {
+            (Surface::Rest, ApiKeyTier::Free) => Self {
                 burst: config.api_rate_limit_free_rest_burst,
                 refill_per_sec: config.api_rate_limit_free_rest_refill_per_sec,
             },
-            ApiKeyTier::Starter => Self {
+            (Surface::Rest, ApiKeyTier::Starter) => Self {
                 burst: config.api_rate_limit_starter_rest_burst,
                 refill_per_sec: config.api_rate_limit_starter_rest_refill_per_sec,
             },
-            ApiKeyTier::Pro => Self {
+            (Surface::Rest, ApiKeyTier::Pro) => Self {
                 burst: config.api_rate_limit_pro_rest_burst,
                 refill_per_sec: config.api_rate_limit_pro_rest_refill_per_sec,
+            },
+            (Surface::Graphql, ApiKeyTier::Free) => Self {
+                burst: config.api_rate_limit_free_graphql_burst,
+                refill_per_sec: config.api_rate_limit_free_graphql_refill_per_sec,
+            },
+            (Surface::Graphql, ApiKeyTier::Starter) => Self {
+                burst: config.api_rate_limit_starter_graphql_burst,
+                refill_per_sec: config.api_rate_limit_starter_graphql_refill_per_sec,
+            },
+            (Surface::Graphql, ApiKeyTier::Pro) => Self {
+                burst: config.api_rate_limit_pro_graphql_burst,
+                refill_per_sec: config.api_rate_limit_pro_graphql_refill_per_sec,
             },
         }
     }
