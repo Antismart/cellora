@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use bigdecimal::BigDecimal;
 use cellora_db::models::{
-    BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, TransactionRow,
+    ApiKeyTier, BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, TransactionRow,
 };
-use cellora_db::{blocks, cells, checkpoint, connect, migrate, transactions};
+use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, transactions};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
@@ -179,4 +179,143 @@ async fn checkpoint_upsert_is_idempotent() {
         .expect("row present");
     assert_eq!(last_indexed_block, 11);
     assert_eq!(last_indexed_hash, vec![0x02; 32]);
+}
+
+// ---------------------------------------------------------------------------
+// api_keys
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_insert_and_lookup() {
+    let h = up().await;
+
+    let inserted = api_keys::insert(
+        &h.pool,
+        "cell_aaaaaaaa",
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
+        ApiKeyTier::Free,
+        Some("integration-test"),
+    )
+    .await
+    .expect("insert");
+    assert_eq!(inserted.tier, ApiKeyTier::Free);
+    assert_eq!(inserted.label.as_deref(), Some("integration-test"));
+    assert!(inserted.revoked_at.is_none());
+
+    let found = api_keys::find_active_by_prefix(&h.pool, "cell_aaaaaaaa")
+        .await
+        .expect("lookup")
+        .expect("row");
+    assert_eq!(found.prefix, "cell_aaaaaaaa");
+    assert_eq!(found.tier, ApiKeyTier::Free);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_lookup_misses_when_unknown_prefix() {
+    let h = up().await;
+
+    let found = api_keys::find_active_by_prefix(&h.pool, "cell_doesnotexist")
+        .await
+        .expect("lookup");
+    assert!(found.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_revocation_hides_from_active_lookup() {
+    let h = up().await;
+
+    api_keys::insert(
+        &h.pool,
+        "cell_bbbbbbbb",
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
+        ApiKeyTier::Pro,
+        None,
+    )
+    .await
+    .expect("insert");
+
+    let revoked = api_keys::revoke(&h.pool, "cell_bbbbbbbb")
+        .await
+        .expect("revoke");
+    assert!(revoked, "first revocation should report a row updated");
+
+    let found = api_keys::find_active_by_prefix(&h.pool, "cell_bbbbbbbb")
+        .await
+        .expect("lookup");
+    assert!(
+        found.is_none(),
+        "revoked key must not appear in active lookup"
+    );
+
+    let revoked_again = api_keys::revoke(&h.pool, "cell_bbbbbbbb")
+        .await
+        .expect("revoke");
+    assert!(
+        !revoked_again,
+        "second revocation should report no rows updated"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_list_orders_newest_first() {
+    let h = up().await;
+
+    api_keys::insert(
+        &h.pool,
+        "cell_11111111",
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
+        ApiKeyTier::Free,
+        Some("first"),
+    )
+    .await
+    .expect("insert first");
+    // Tiny sleep so the timestamps differ; otherwise ORDER BY created_at
+    // is non-deterministic for rows in the same millisecond.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    api_keys::insert(
+        &h.pool,
+        "cell_22222222",
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
+        ApiKeyTier::Starter,
+        Some("second"),
+    )
+    .await
+    .expect("insert second");
+
+    let listed = api_keys::list_all(&h.pool).await.expect("list");
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].prefix, "cell_22222222");
+    assert_eq!(listed[1].prefix, "cell_11111111");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_touch_last_used_updates_timestamp() {
+    let h = up().await;
+
+    api_keys::insert(
+        &h.pool,
+        "cell_cccccccc",
+        "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
+        ApiKeyTier::Free,
+        None,
+    )
+    .await
+    .expect("insert");
+
+    assert!(api_keys::find_active_by_prefix(&h.pool, "cell_cccccccc")
+        .await
+        .expect("lookup")
+        .expect("row")
+        .last_used_at
+        .is_none());
+
+    api_keys::touch_last_used(&h.pool, "cell_cccccccc")
+        .await
+        .expect("touch");
+
+    let after = api_keys::find_active_by_prefix(&h.pool, "cell_cccccccc")
+        .await
+        .expect("lookup")
+        .expect("row");
+    assert!(after.last_used_at.is_some());
 }

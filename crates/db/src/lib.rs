@@ -5,6 +5,7 @@
 //! `cells`, `checkpoint`) take a `sqlx::Postgres` executor, so callers decide
 //! whether to run a statement on a pool or inside an open transaction.
 
+pub mod api_keys;
 pub mod blocks;
 pub mod cells;
 pub mod checkpoint;

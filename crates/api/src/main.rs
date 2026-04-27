@@ -11,10 +11,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::Context;
+use cellora_api::admin::{self, Cli, Command};
 use cellora_api::tip::{spawn_refresh_task, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::{ckb::CkbClient, config::Config, logging};
 use cellora_db::connect;
+use clap::Parser;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
@@ -25,8 +27,22 @@ async fn main() -> anyhow::Result<()> {
     // `.env` is a developer convenience; production runs with real env vars only.
     let _ = dotenvy::dotenv();
 
+    let cli = Cli::parse();
     let config = Config::from_env().context("load configuration")?;
     logging::init(&config.log_level, config.log_format).context("initialise logging")?;
+
+    match cli.command {
+        Some(Command::Admin { action }) => {
+            let pool = connect(&config.database_url)
+                .await
+                .context("connect to postgres")?;
+            admin::run(&pool, action).await?;
+            return Ok(());
+        }
+        None => {
+            // Fall through to the default "serve" path below.
+        }
+    }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

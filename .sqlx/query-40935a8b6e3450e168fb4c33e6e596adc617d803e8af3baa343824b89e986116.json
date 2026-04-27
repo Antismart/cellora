@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            prefix,\n            secret_hash,\n            tier AS \"tier: ApiKeyTier\",\n            label,\n            created_at,\n            revoked_at,\n            last_used_at\n        FROM api_keys\n        ORDER BY created_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "prefix",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "secret_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "tier: ApiKeyTier",
+        "type_info": {
+          "Custom": {
+            "name": "api_key_tier",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "pro"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "last_used_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "40935a8b6e3450e168fb4c33e6e596adc617d803e8af3baa343824b89e986116"
+}

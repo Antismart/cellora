@@ -144,3 +144,48 @@ pub struct Checkpoint {
     pub last_indexed_block: i64,
     pub last_indexed_hash: Vec<u8>,
 }
+
+/// Subscription tier attached to an API key. Drives the per-key rate
+/// limit numbers; the actual values live in config so they are tunable
+/// per environment without DB writes.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "api_key_tier", rename_all = "lowercase")]
+pub enum ApiKeyTier {
+    Free,
+    Starter,
+    Pro,
+}
+
+impl ApiKeyTier {
+    /// Lower-cased label used in CLI output, logs, and OpenAPI examples.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Starter => "starter",
+            Self::Pro => "pro",
+        }
+    }
+}
+
+/// Read-side shape of an `api_keys` row. Created at issuance, hashed
+/// secret only — the plaintext secret is shown to the operator once at
+/// creation and never persisted.
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct ApiKey {
+    pub prefix: String,
+    pub secret_hash: String,
+    pub tier: ApiKeyTier,
+    pub label: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+impl ApiKey {
+    /// `true` when the key has been revoked and should fail authentication.
+    pub fn is_revoked(&self) -> bool {
+        self.revoked_at.is_some()
+    }
+}

@@ -17,8 +17,10 @@
 //! 4. Timeout — fails slow requests with HTTP 408 rather than holding a
 //!    database connection open indefinitely.
 
+pub mod admin;
 pub mod error;
 pub mod hex;
+pub mod keys;
 pub mod openapi;
 pub mod pagination;
 pub mod routes;
@@ -96,10 +98,7 @@ pub fn build_app(state: AppState) -> Router {
 /// module because the spec is both code-derived and self-referential — it
 /// describes the handlers that sit next to it.
 async fn openapi_handler() -> impl IntoResponse {
-    (
-        [("content-type", "application/json")],
-        openapi::spec_json(),
-    )
+    ([("content-type", "application/json")], openapi::spec_json())
 }
 
 /// Annotate every 2xx response with the indexer's tip height. Responses
