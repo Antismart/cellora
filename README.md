@@ -2,7 +2,7 @@
 
 Production-grade, multi-tenant SaaS indexer for the [Nervos CKB](https://www.nervos.org) blockchain. Cellora exposes indexed on-chain data (blocks, transactions, cells) via REST and GraphQL APIs, so DApp teams can query CKB without running their own indexing infrastructure.
 
-> **Status:** Week 2 of a 7-week build-out. Week 1 shipped the Cargo workspace, the docker-compose dev stack, the initial schema, and a block-ingestion service that polls a CKB node and writes blocks, transactions, and cells to Postgres. Week 2 introduces the REST API crate; today it serves health and blocks endpoints, with cells, stats, and an OpenAPI spec landing across the remaining Week 2 slices. GraphQL, authentication, webhooks, billing, and the dashboard are in later weeks.
+> **Status:** Week 3 of a 7-week build-out. Week 1 shipped block ingestion. Week 2 added the read-only REST API (health, blocks, cells, stats, OpenAPI spec) with cursor-based pagination and a tip cache. Week 3 lands API-key authentication (Argon2id-hashed bearer tokens), per-key Redis token-bucket rate limiting with separate REST and GraphQL surfaces, the GraphQL endpoint at `/graphql`, and an admin CLI for issuing keys. Reorg handling, observability, the dashboard, webhooks, and billing are in later weeks.
 
 ## Architecture at a glance
 
@@ -51,18 +51,39 @@ INFO cellora_indexer::poller: indexed block block=0 hash=… txs=2 cells=11 cons
 INFO cellora_indexer::poller: indexed block block=1 hash=… txs=1 cells=0 consumed=0 elapsed_ms=2
 ```
 
-The API binds by default to `0.0.0.0:8080`. Once it is running:
+The API binds by default to `0.0.0.0:8080`. Health and the OpenAPI spec are public; everything else needs a Bearer token. Issue one via the admin CLI:
 
 ```bash
-curl -s http://localhost:8080/v1/health        | jq
-curl -s http://localhost:8080/v1/health/ready  | jq
-curl -s http://localhost:8080/v1/blocks/latest | jq
-curl -s http://localhost:8080/v1/blocks/0      | jq
-curl -s "http://localhost:8080/v1/cells?lock_hash=0x$(printf 'aa%.0s' {1..32})" | jq
-curl -s http://localhost:8080/v1/stats         | jq
+cargo run -p cellora-api -- admin create-key --tier free --label "local-dev"
+# Record the printed `full` value — it is shown only once.
+export CELLORA_API_KEY=cell_...
 ```
 
-See [`docs/api.md`](./docs/api.md) for every endpoint, query parameter, cursor-based pagination example, and error shape. The OpenAPI specification lives at [`docs/openapi.json`](./docs/openapi.json) and is also served at `/v1/openapi.json`.
+Then:
+
+```bash
+# Public — no auth needed.
+curl -s http://localhost:8080/v1/health        | jq
+curl -s http://localhost:8080/v1/health/ready  | jq
+
+# Authenticated REST.
+curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
+  http://localhost:8080/v1/blocks/latest | jq
+curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
+  http://localhost:8080/v1/blocks/0 | jq
+curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
+  "http://localhost:8080/v1/cells?lock_hash=0x$(printf 'aa%.0s' {1..32})" | jq
+curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
+  http://localhost:8080/v1/stats | jq
+
+# Authenticated GraphQL.
+curl -s -X POST http://localhost:8080/graphql \
+  -H "authorization: Bearer $CELLORA_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"query":"{ blocksLatest { number hash } stats { lagBlocks } }"}' | jq
+```
+
+See [`docs/api.md`](./docs/api.md) for every REST endpoint, the full GraphQL schema, auth and rate-limit semantics, and curl examples. The OpenAPI specification lives at [`docs/openapi.json`](./docs/openapi.json) and is also served at `/v1/openapi.json`.
 
 `Ctrl-C` triggers graceful shutdown on either binary. The indexer finishes any in-flight block, advances the checkpoint, and exits zero; the API drains in-flight requests before closing the listener.
 
@@ -93,6 +114,22 @@ Every setting is environment-driven (figment loads from `.env` in dev and real e
 | `CELLORA_API_MAX_PAGE_SIZE` | `500` | Upper bound on `limit` accepted from clients |
 | `CELLORA_API_REQUEST_TIMEOUT_MS` | `10000` | Per-request timeout enforced by the middleware stack |
 | `CELLORA_API_TIP_CACHE_REFRESH_MS` | `1000` | Refresh interval for the cached `(indexer_tip, node_tip)` snapshot |
+| `CELLORA_API_AUTH_CACHE_TTL_SECONDS` | `60` | TTL of the in-process auth verification cache |
+| `CELLORA_API_AUTH_CACHE_CAPACITY` | `10000` | Max entries in the auth verification cache |
+| `CELLORA_REDIS_URL` | `redis://localhost:6379` | Redis used for the per-key rate limiter |
+| `CELLORA_API_RATE_LIMIT_FAIL_OPEN` | `true` | Fail-open on Redis outage; set `false` to fail closed |
+| `CELLORA_API_RATE_LIMIT_FREE_REST_BURST` | `30` | Free-tier REST bucket capacity |
+| `CELLORA_API_RATE_LIMIT_FREE_REST_REFILL_PER_SEC` | `1` | Free-tier REST refill rate |
+| `CELLORA_API_RATE_LIMIT_STARTER_REST_BURST` | `300` | Starter-tier REST bucket capacity |
+| `CELLORA_API_RATE_LIMIT_STARTER_REST_REFILL_PER_SEC` | `20` | Starter-tier REST refill rate |
+| `CELLORA_API_RATE_LIMIT_PRO_REST_BURST` | `3000` | Pro-tier REST bucket capacity |
+| `CELLORA_API_RATE_LIMIT_PRO_REST_REFILL_PER_SEC` | `200` | Pro-tier REST refill rate |
+| `CELLORA_API_RATE_LIMIT_FREE_GRAPHQL_BURST` | `10` | Free-tier GraphQL bucket capacity |
+| `CELLORA_API_RATE_LIMIT_FREE_GRAPHQL_REFILL_PER_SEC` | `0.5` | Free-tier GraphQL refill rate |
+| `CELLORA_API_RATE_LIMIT_STARTER_GRAPHQL_BURST` | `100` | Starter-tier GraphQL bucket capacity |
+| `CELLORA_API_RATE_LIMIT_STARTER_GRAPHQL_REFILL_PER_SEC` | `10` | Starter-tier GraphQL refill rate |
+| `CELLORA_API_RATE_LIMIT_PRO_GRAPHQL_BURST` | `1000` | Pro-tier GraphQL bucket capacity |
+| `CELLORA_API_RATE_LIMIT_PRO_GRAPHQL_REFILL_PER_SEC` | `100` | Pro-tier GraphQL refill rate |
 
 ## Running the tests
 
@@ -110,12 +147,17 @@ cargo test -p cellora-db --test db_integration
 cargo test -p cellora-indexer --test indexer_stack_test
 
 # 4. API end-to-end — builds the full Axum router against a testcontainers
-#    Postgres and drives it with tower::ServiceExt::oneshot (no socket).
+#    Postgres + Redis stack and drives it with tower::ServiceExt::oneshot
+#    (no socket). Covers REST, GraphQL, auth, and rate limiting.
 cargo test -p cellora-api
 
 # Or run everything at once:
 cargo test --workspace
 ```
+
+There is also a load test against a running stack — see
+[`tests/load/rate_limit.js`](./tests/load/rate_limit.js) for the k6
+script and how to issue a key for it.
 
 ## Development workflow
 
@@ -143,6 +185,8 @@ cellora/
 │   ├── db/                         # schema-aware repositories
 │   ├── indexer/                    # block poller binary
 │   └── api/                        # REST API binary
+├── tests/
+│   └── load/                       # k6 load tests against a running stack
 └── docs/
     ├── architecture.md
     ├── architecture-overview.md
@@ -155,8 +199,8 @@ cellora/
 ## Roadmap
 
 1. **Week 1** — workspace, docker-compose, ingestion pipeline.
-2. **Week 2** — REST API + OpenAPI ← *current*.
-3. **Week 3** — API-key auth, Redis rate limiting, GraphQL.
+2. **Week 2** — REST API + OpenAPI.
+3. **Week 3** — API-key auth, Redis rate limiting, GraphQL ← *current*.
 4. **Week 4** — reorg handling, Prometheus metrics, Grafana, OpenTelemetry.
 5. **Week 5** — dashboard (React + Vite + Tailwind) with GitHub OAuth.
 6. **Week 6** — webhooks and GraphQL subscriptions.
