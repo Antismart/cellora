@@ -103,6 +103,14 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         api_tip_cache_refresh_ms: 1_000,
         api_auth_cache_ttl_seconds: 60,
         api_auth_cache_capacity: 10_000,
+        redis_url: "redis://localhost:6379".into(),
+        api_rate_limit_fail_open: true,
+        api_rate_limit_free_rest_burst: 30,
+        api_rate_limit_free_rest_refill_per_sec: 1.0,
+        api_rate_limit_starter_rest_burst: 300,
+        api_rate_limit_starter_rest_refill_per_sec: 20.0,
+        api_rate_limit_pro_rest_burst: 3_000,
+        api_rate_limit_pro_rest_refill_per_sec: 200.0,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);

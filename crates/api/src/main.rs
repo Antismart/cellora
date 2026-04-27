@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use cellora_api::admin::{self, Cli, Command};
+use cellora_api::ratelimit::RateLimiter;
 use cellora_api::tip::{spawn_refresh_task, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::{ckb::CkbClient, config::Config, logging};
@@ -73,7 +74,15 @@ async fn main() -> anyhow::Result<()> {
         cancel.clone(),
     );
 
-    let state = AppState::with_tip(pool, config, tip);
+    // Construct the Redis-backed rate limiter. A failed connection at
+    // boot is logged but does not abort startup — the API serves
+    // fail-open until Redis is reachable.
+    let rate_limiter = build_rate_limiter(&config).await;
+
+    let mut state = AppState::with_tip(pool, config, tip);
+    if let Some(limiter) = rate_limiter {
+        state = state.with_rate_limiter(limiter);
+    }
     let app = build_app(state);
 
     let listener = TcpListener::bind(bind_addr)
@@ -96,6 +105,26 @@ async fn main() -> anyhow::Result<()> {
     serve_result?;
     info!("cellora api stopped cleanly");
     Ok(())
+}
+
+/// Best-effort construction of the rate limiter. Returns `None` when
+/// Redis is unreachable at boot — the service starts anyway and the
+/// limiter middleware fails open.
+async fn build_rate_limiter(config: &Config) -> Option<RateLimiter> {
+    let client = match redis::Client::open(config.redis_url.as_str()) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!(error = %err, url = %config.redis_url, "redis client construction failed");
+            return None;
+        }
+    };
+    match redis::aio::ConnectionManager::new(client).await {
+        Ok(manager) => Some(RateLimiter::new(manager, config.api_rate_limit_fail_open)),
+        Err(err) => {
+            tracing::warn!(error = %err, "redis connection manager failed at startup");
+            None
+        }
+    }
 }
 
 /// Future that completes on SIGINT or SIGTERM. Used by `axum::serve` to

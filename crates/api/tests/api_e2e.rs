@@ -17,6 +17,7 @@ use std::time::{Instant, SystemTime};
 
 use bigdecimal::BigDecimal;
 use cellora_api::keys as api_keys_helper;
+use cellora_api::ratelimit::RateLimiter;
 use cellora_api::tip::{TipSnapshot, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::config::{Config, LogFormat};
@@ -27,6 +28,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use testcontainers_modules::{
     postgres::Postgres,
+    redis::Redis,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
 };
 use tower::ServiceExt;
@@ -41,11 +43,64 @@ struct Harness {
     /// that exercise authenticated endpoints should pass this through
     /// [`get_authed`].
     bearer: String,
-    // Keep the container alive for the lifetime of the test.
+    // Keep containers alive for the lifetime of the test.
     _pg: ContainerAsync<Postgres>,
+    _redis: Option<ContainerAsync<Redis>>,
+}
+
+/// What infrastructure the harness should spin up. Most tests use
+/// [`HarnessOpts::default`] which provisions both Postgres and Redis;
+/// rate-limit-specific failure tests use [`HarnessOpts::no_redis`] to
+/// exercise the fail-open / fail-closed code paths without a real
+/// outage.
+#[derive(Debug, Clone, Copy, Default)]
+struct HarnessOpts {
+    /// When `false`, no Redis container is started and the limiter is
+    /// not attached to `AppState`. Defaults to `true`.
+    with_redis: bool,
+    /// When set, override the free-tier REST burst capacity in the
+    /// generated config so a small fixed N triggers 429.
+    free_rest_burst_override: Option<u32>,
+    /// When set, override the free-tier REST refill rate.
+    free_rest_refill_override: Option<f64>,
+    /// When `false`, configure the limiter to fail closed on Redis
+    /// errors instead of fail-open.
+    fail_open: bool,
+}
+
+impl HarnessOpts {
+    fn defaults() -> Self {
+        Self {
+            with_redis: true,
+            free_rest_burst_override: None,
+            free_rest_refill_override: None,
+            fail_open: true,
+        }
+    }
+
+    fn no_redis(self) -> Self {
+        Self {
+            with_redis: false,
+            ..self
+        }
+    }
+
+    fn small_free_burst(self, burst: u32) -> Self {
+        Self {
+            free_rest_burst_override: Some(burst),
+            // Default to a very slow refill so the burst bound is what
+            // a test observes, not the per-second top-up.
+            free_rest_refill_override: Some(0.1),
+            ..self
+        }
+    }
 }
 
 async fn up() -> Harness {
+    up_with(HarnessOpts::defaults()).await
+}
+
+async fn up_with(opts: HarnessOpts) -> Harness {
     let pg = Postgres::default()
         .with_tag("16-alpine")
         .start()
@@ -72,9 +127,42 @@ async fn up() -> Harness {
     .await
     .expect("insert key");
 
-    let config = test_config(&url);
+    let mut config = test_config(&url);
+    if let Some(burst) = opts.free_rest_burst_override {
+        config.api_rate_limit_free_rest_burst = burst;
+    }
+    if let Some(refill) = opts.free_rest_refill_override {
+        config.api_rate_limit_free_rest_refill_per_sec = refill;
+    }
+    config.api_rate_limit_fail_open = opts.fail_open;
+
+    // Start Redis (or not). If not, the limiter is never attached and
+    // the middleware's no-limiter fail-open path is exercised.
+    let (redis_container, limiter) = if opts.with_redis {
+        let redis = Redis
+            .with_tag("7-alpine")
+            .start()
+            .await
+            .expect("start redis");
+        let host = redis.get_host().await.expect("redis host");
+        let port = redis.get_host_port_ipv4(6379).await.expect("redis port");
+        config.redis_url = format!("redis://{host}:{port}");
+
+        let client = redis::Client::open(config.redis_url.as_str()).expect("redis client");
+        let manager = redis::aio::ConnectionManager::new(client)
+            .await
+            .expect("redis manager");
+        let limiter = RateLimiter::new(manager, config.api_rate_limit_fail_open);
+        (Some(redis), Some(limiter))
+    } else {
+        (None, None)
+    };
+
     let tip = TipTracker::new();
-    let state = AppState::with_tip(pool.clone(), config, tip.clone());
+    let mut state = AppState::with_tip(pool.clone(), config, tip.clone());
+    if let Some(l) = limiter {
+        state = state.with_rate_limiter(l);
+    }
     let app = build_app(state);
     Harness {
         app,
@@ -82,6 +170,7 @@ async fn up() -> Harness {
         tip,
         bearer: issued.full,
         _pg: pg,
+        _redis: redis_container,
     }
 }
 
@@ -184,6 +273,14 @@ fn test_config(database_url: &str) -> Config {
         api_tip_cache_refresh_ms: 1_000,
         api_auth_cache_ttl_seconds: 60,
         api_auth_cache_capacity: 10_000,
+        redis_url: "redis://localhost:6379".to_owned(),
+        api_rate_limit_fail_open: true,
+        api_rate_limit_free_rest_burst: 30,
+        api_rate_limit_free_rest_refill_per_sec: 1.0,
+        api_rate_limit_starter_rest_burst: 300,
+        api_rate_limit_starter_rest_refill_per_sec: 20.0,
+        api_rate_limit_pro_rest_burst: 3_000,
+        api_rate_limit_pro_rest_refill_per_sec: 200.0,
     }
 }
 
@@ -1041,6 +1138,132 @@ async fn public_routes_remain_accessible_without_auth() {
             response.status()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// rate limiting
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rate_limit_blocks_burst_then_recovers_via_retry_after() {
+    // Free-tier burst forced to 3 so the third request still passes and
+    // the fourth gets 429 with a `Retry-After` set by the bucket.
+    let harness = up_with(HarnessOpts::defaults().small_free_burst(3)).await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+
+    for n in 0..3 {
+        let response = harness
+            .app
+            .clone()
+            .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+            .await
+            .expect("serve");
+        assert_eq!(response.status(), StatusCode::OK, "request {n} should pass");
+        assert!(
+            response.headers().get("x-ratelimit-limit").is_some(),
+            "x-ratelimit-limit must accompany every authenticated 2xx"
+        );
+    }
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        response.headers().get("retry-after").is_some(),
+        "429 must carry Retry-After"
+    );
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "rate_limited");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rate_limit_buckets_are_per_key() {
+    let harness = up_with(HarnessOpts::defaults().small_free_burst(2)).await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+
+    // Issue a second key — its bucket should be independent of the
+    // harness's pre-issued bearer.
+    let issued = api_keys_helper::generate().expect("generate");
+    api_keys::insert(
+        &harness.pool,
+        &issued.prefix,
+        &issued.secret_hash,
+        ApiKeyTier::Free,
+        None,
+    )
+    .await
+    .expect("insert");
+
+    // Drain the first key's bucket.
+    for _ in 0..2 {
+        let response = harness
+            .app
+            .clone()
+            .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+            .await
+            .expect("serve");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let drained = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+        .await
+        .expect("serve");
+    assert_eq!(drained.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // The second key's bucket is still full.
+    let other = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &issued.full))
+        .await
+        .expect("serve");
+    assert_eq!(other.status(), StatusCode::OK);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rate_limit_fails_open_when_no_limiter_configured() {
+    // With no Redis container, the harness leaves `rate_limiter` unset.
+    // The middleware should pass requests through.
+    let harness = up_with(HarnessOpts::defaults().no_redis()).await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+
+    for _ in 0..40 {
+        let response = harness
+            .app
+            .clone()
+            .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+            .await
+            .expect("serve");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rate_limit_emits_remaining_count_header() {
+    let harness = up_with(HarnessOpts::defaults().small_free_burst(3)).await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let remaining = response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .expect("remaining header")
+        .to_str()
+        .expect("ascii");
+    let remaining: u32 = remaining.parse().expect("integer");
+    assert!(remaining < 3, "remaining count must reflect the decrement");
 }
 
 // ---------------------------------------------------------------------------

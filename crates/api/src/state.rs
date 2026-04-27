@@ -11,6 +11,7 @@ use cellora_common::config::Config;
 use sqlx::PgPool;
 
 use crate::auth::AuthCache;
+use crate::ratelimit::RateLimiter;
 use crate::tip::TipTracker;
 
 /// Application state injected into every handler.
@@ -25,6 +26,10 @@ pub struct AppState {
     /// In-process cache for resolved API keys. Bypasses Argon2
     /// verification for repeat-presented bearer tokens.
     pub auth_cache: AuthCache,
+    /// Per-key Redis-backed rate limiter, or `None` when the limiter
+    /// could not be initialised at startup. A missing limiter is treated
+    /// as fail-open by the middleware.
+    pub rate_limiter: Option<RateLimiter>,
 }
 
 impl AppState {
@@ -40,6 +45,7 @@ impl AppState {
             config: Arc::new(config),
             tip: TipTracker::new(),
             auth_cache,
+            rate_limiter: None,
         }
     }
 
@@ -56,6 +62,15 @@ impl AppState {
             config: Arc::new(config),
             tip,
             auth_cache,
+            rate_limiter: None,
         }
+    }
+
+    /// Replace the rate limiter on an existing state. The limiter is
+    /// initialised after construction in `main` because building it
+    /// requires an async Redis connection.
+    pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(limiter);
+        self
     }
 }

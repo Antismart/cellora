@@ -45,6 +45,16 @@ pub enum ApiError {
     #[error("unauthorized: {0}")]
     Unauthorized(&'static str),
 
+    /// Rate limit exceeded for the presented key. The `retry_after_seconds`
+    /// is reflected in the `Retry-After` response header by the rate-limit
+    /// middleware (the `IntoResponse` for [`ApiError`] only emits the
+    /// JSON envelope).
+    #[error("rate limited: retry after {retry_after_seconds}s")]
+    RateLimited {
+        /// Number of seconds the client should wait before retrying.
+        retry_after_seconds: u64,
+    },
+
     /// Dependency required to serve the request is unavailable.
     #[error("upstream unavailable: {0}")]
     UpstreamUnavailable(&'static str),
@@ -62,6 +72,7 @@ impl ApiError {
             Self::BadRequest(_) => "bad_request",
             Self::InvalidCursor(_) => "invalid_cursor",
             Self::Unauthorized(_) => "unauthorized",
+            Self::RateLimited { .. } => "rate_limited",
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::Internal(_) => "internal",
         }
@@ -73,6 +84,7 @@ impl ApiError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::BadRequest(_) | Self::InvalidCursor(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::UpstreamUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -89,6 +101,7 @@ impl ApiError {
             Self::BadRequest(msg) => msg.clone(),
             Self::Internal(_) => "internal error".to_owned(),
             Self::Unauthorized(_) => "unauthorized".to_owned(),
+            Self::RateLimited { .. } => "rate limited".to_owned(),
         }
     }
 }

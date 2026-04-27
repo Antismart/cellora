@@ -63,6 +63,37 @@ pub struct Config {
     /// Maximum number of entries in the auth verification cache.
     #[serde(default = "default_api_auth_cache_capacity")]
     pub api_auth_cache_capacity: u64,
+
+    /// Redis URL used for the per-key rate limiter (and, in later weeks,
+    /// reorg pub/sub and webhook delivery).
+    #[serde(default = "default_redis_url")]
+    pub redis_url: String,
+    /// When `true`, rate limiting is bypassed if Redis is unreachable.
+    /// Failing closed on a Redis outage would take the API down with no
+    /// upside; failing open trades a bounded period of unmetered traffic
+    /// for continued availability. Operators who want fail-closed flip
+    /// this to `false`.
+    #[serde(default = "default_api_rate_limit_fail_open")]
+    pub api_rate_limit_fail_open: bool,
+
+    /// Free-tier REST burst capacity (max tokens in the bucket).
+    #[serde(default = "default_free_rest_burst")]
+    pub api_rate_limit_free_rest_burst: u32,
+    /// Free-tier REST refill rate, tokens per second.
+    #[serde(default = "default_free_rest_refill")]
+    pub api_rate_limit_free_rest_refill_per_sec: f64,
+    /// Starter-tier REST burst capacity.
+    #[serde(default = "default_starter_rest_burst")]
+    pub api_rate_limit_starter_rest_burst: u32,
+    /// Starter-tier REST refill rate, tokens per second.
+    #[serde(default = "default_starter_rest_refill")]
+    pub api_rate_limit_starter_rest_refill_per_sec: f64,
+    /// Pro-tier REST burst capacity.
+    #[serde(default = "default_pro_rest_burst")]
+    pub api_rate_limit_pro_rest_burst: u32,
+    /// Pro-tier REST refill rate, tokens per second.
+    #[serde(default = "default_pro_rest_refill")]
+    pub api_rate_limit_pro_rest_refill_per_sec: f64,
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -99,6 +130,33 @@ fn default_api_auth_cache_ttl_seconds() -> u64 {
 
 fn default_api_auth_cache_capacity() -> u64 {
     10_000
+}
+
+fn default_redis_url() -> String {
+    "redis://localhost:6379".to_owned()
+}
+
+fn default_api_rate_limit_fail_open() -> bool {
+    true
+}
+
+fn default_free_rest_burst() -> u32 {
+    30
+}
+fn default_free_rest_refill() -> f64 {
+    1.0
+}
+fn default_starter_rest_burst() -> u32 {
+    300
+}
+fn default_starter_rest_refill() -> f64 {
+    20.0
+}
+fn default_pro_rest_burst() -> u32 {
+    3_000
+}
+fn default_pro_rest_refill() -> f64 {
+    200.0
 }
 
 impl Config {
