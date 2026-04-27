@@ -38,6 +38,13 @@ pub enum ApiError {
     #[error("invalid cursor: {0}")]
     InvalidCursor(&'static str),
 
+    /// Authentication failed — missing, malformed, unknown, or revoked
+    /// credentials. The variant carries an internal reason for logs;
+    /// every external response uses the same opaque "unauthorized"
+    /// message so callers cannot enumerate reasons.
+    #[error("unauthorized: {0}")]
+    Unauthorized(&'static str),
+
     /// Dependency required to serve the request is unavailable.
     #[error("upstream unavailable: {0}")]
     UpstreamUnavailable(&'static str),
@@ -54,6 +61,7 @@ impl ApiError {
             Self::NotFound(_) => "not_found",
             Self::BadRequest(_) => "bad_request",
             Self::InvalidCursor(_) => "invalid_cursor",
+            Self::Unauthorized(_) => "unauthorized",
             Self::UpstreamUnavailable(_) => "upstream_unavailable",
             Self::Internal(_) => "internal",
         }
@@ -64,13 +72,15 @@ impl ApiError {
         match self {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::BadRequest(_) | Self::InvalidCursor(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::UpstreamUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     /// Public-facing message placed in the envelope. Internal errors are
-    /// deliberately opaque — the original is still logged.
+    /// deliberately opaque — the original is still logged. Authentication
+    /// failures are also opaque so callers cannot enumerate reasons.
     fn public_message(&self) -> String {
         match self {
             Self::NotFound(msg) | Self::InvalidCursor(msg) | Self::UpstreamUnavailable(msg) => {
@@ -78,6 +88,7 @@ impl ApiError {
             }
             Self::BadRequest(msg) => msg.clone(),
             Self::Internal(_) => "internal error".to_owned(),
+            Self::Unauthorized(_) => "unauthorized".to_owned(),
         }
     }
 }
@@ -123,10 +134,19 @@ impl IntoResponse for ApiError {
         // Log internal errors at ERROR with the original source attached.
         // Everything else is logged at INFO — these are client errors, not
         // service faults, and should not trip alerts.
-        if let Self::Internal(err) = &self {
-            tracing::error!(error = %err, "internal api error");
-        } else {
-            tracing::info!(code = self.code(), error = %self, "client error");
+        match &self {
+            Self::Internal(err) => {
+                tracing::error!(error = %err, "internal api error");
+            }
+            Self::Unauthorized(reason) => {
+                // Auth failures log the *internal* reason at INFO so
+                // operators can debug, while clients always see the same
+                // opaque public message.
+                tracing::info!(reason = %reason, "unauthorized request");
+            }
+            other => {
+                tracing::info!(code = self.code(), error = %other, "client error");
+            }
         }
 
         let body = ErrorEnvelope {

@@ -101,6 +101,8 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         api_max_page_size: 500,
         api_request_timeout_ms: 10_000,
         api_tip_cache_refresh_ms: 1_000,
+        api_auth_cache_ttl_seconds: 60,
+        api_auth_cache_capacity: 10_000,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);

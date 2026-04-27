@@ -18,6 +18,7 @@
 //!    database connection open indefinitely.
 
 pub mod admin;
+pub mod auth;
 pub mod error;
 pub mod hex;
 pub mod keys;
@@ -81,14 +82,24 @@ pub fn build_app(state: AppState) -> Router {
             request_timeout,
         ));
 
-    Router::new()
+    let public = Router::new()
         .route("/v1/health", get(routes::health::liveness))
         .route("/v1/health/ready", get(routes::health::readiness))
+        .route("/v1/openapi.json", get(openapi_handler));
+
+    // The auth layer sits only on this sub-router. Public routes live in
+    // a separate `Router` that never composes with it, so there is no
+    // path branch inside the middleware to get wrong.
+    let authenticated = Router::new()
         .route("/v1/blocks/latest", get(routes::blocks::latest))
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
         .route("/v1/stats", get(routes::stats::stats))
-        .route("/v1/openapi.json", get(openapi_handler))
+        .layer(from_fn_with_state(state.clone(), auth::middleware));
+
+    Router::new()
+        .merge(public)
+        .merge(authenticated)
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(middleware)
         .with_state(state)

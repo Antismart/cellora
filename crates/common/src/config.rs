@@ -54,6 +54,15 @@ pub struct Config {
     /// Refresh interval for the cached `(indexer_tip, node_tip)` snapshot.
     #[serde(default = "default_api_tip_cache_refresh_ms")]
     pub api_tip_cache_refresh_ms: u64,
+
+    /// Time-to-live for entries in the in-process auth verification cache.
+    /// Keeps Argon2 verification off the hot path for repeat-presented
+    /// keys; revocation is best-effort within this window.
+    #[serde(default = "default_api_auth_cache_ttl_seconds")]
+    pub api_auth_cache_ttl_seconds: u64,
+    /// Maximum number of entries in the auth verification cache.
+    #[serde(default = "default_api_auth_cache_capacity")]
+    pub api_auth_cache_capacity: u64,
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -82,6 +91,14 @@ fn default_api_request_timeout_ms() -> u64 {
 
 fn default_api_tip_cache_refresh_ms() -> u64 {
     1_000
+}
+
+fn default_api_auth_cache_ttl_seconds() -> u64 {
+    60
+}
+
+fn default_api_auth_cache_capacity() -> u64 {
+    10_000
 }
 
 impl Config {

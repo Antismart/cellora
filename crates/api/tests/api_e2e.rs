@@ -16,11 +16,12 @@ use axum::http::{header::HeaderName, Request, StatusCode};
 use std::time::{Instant, SystemTime};
 
 use bigdecimal::BigDecimal;
+use cellora_api::keys as api_keys_helper;
 use cellora_api::tip::{TipSnapshot, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::config::{Config, LogFormat};
-use cellora_db::models::{BlockRow, CellRow, ConsumedCellRef, HashType};
-use cellora_db::{blocks, cells, connect, migrate};
+use cellora_db::models::{ApiKeyTier, BlockRow, CellRow, ConsumedCellRef, HashType};
+use cellora_db::{api_keys, blocks, cells, connect, migrate};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -36,6 +37,10 @@ struct Harness {
     app: axum::Router,
     pool: PgPool,
     tip: TipTracker,
+    /// Full bearer string of the test key the harness pre-issues. Tests
+    /// that exercise authenticated endpoints should pass this through
+    /// [`get_authed`].
+    bearer: String,
     // Keep the container alive for the lifetime of the test.
     _pg: ContainerAsync<Postgres>,
 }
@@ -53,6 +58,20 @@ async fn up() -> Harness {
     let pool = connect_with_retry(&url, 10).await;
     migrate::run(&pool).await.expect("migrate");
 
+    // Pre-issue a free-tier key so authenticated endpoints can be
+    // exercised by the existing test bodies. Specific auth-failure
+    // cases construct their own keys / headers.
+    let issued = api_keys_helper::generate().expect("generate");
+    api_keys::insert(
+        &pool,
+        &issued.prefix,
+        &issued.secret_hash,
+        ApiKeyTier::Free,
+        Some("test"),
+    )
+    .await
+    .expect("insert key");
+
     let config = test_config(&url);
     let tip = TipTracker::new();
     let state = AppState::with_tip(pool.clone(), config, tip.clone());
@@ -61,6 +80,7 @@ async fn up() -> Harness {
         app,
         pool,
         tip,
+        bearer: issued.full,
         _pg: pg,
     }
 }
@@ -162,6 +182,8 @@ fn test_config(database_url: &str) -> Config {
         api_max_page_size: 500,
         api_request_timeout_ms: 10_000,
         api_tip_cache_refresh_ms: 1_000,
+        api_auth_cache_ttl_seconds: 60,
+        api_auth_cache_capacity: 10_000,
     }
 }
 
@@ -169,6 +191,18 @@ fn get(path: &str) -> Request<Body> {
     Request::builder()
         .method("GET")
         .uri(path)
+        .body(Body::empty())
+        .expect("build request")
+}
+
+/// `GET path` with `Authorization: Bearer <bearer>` attached. Used by every
+/// test that hits an authenticated endpoint via the harness's pre-issued
+/// key.
+fn get_authed(path: &str, bearer: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("authorization", format!("Bearer {bearer}"))
         .body(Body::empty())
         .expect("build request")
 }
@@ -265,13 +299,35 @@ async fn request_id_is_generated_when_client_omits_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn unknown_route_returns_404() {
+async fn unknown_route_under_protected_namespace_returns_401_without_auth() {
+    // Once auth lands, the authenticated sub-router is the catch-all for
+    // anything not matched by a public route. Without a Bearer header
+    // every miss returns 401 — we deliberately do not leak whether a
+    // path corresponds to a real endpoint to unauthenticated clients.
     let harness = up().await;
 
     let response = harness
         .app
         .clone()
         .oneshot(get("/v1/does-not-exist"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_route_under_protected_namespace_returns_404_when_authed() {
+    // With a valid Bearer the auth layer passes through and the inner
+    // authenticated router returns 404 for unmatched paths — tooling
+    // (Postman, OpenAPI clients) can distinguish "wrong path" from
+    // "wrong key".
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/does-not-exist", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -285,7 +341,7 @@ async fn blocks_latest_returns_404_on_empty_database() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/latest"))
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -304,7 +360,7 @@ async fn blocks_latest_returns_highest_numbered_block() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/latest"))
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -324,7 +380,7 @@ async fn blocks_by_number_returns_requested_block() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/42"))
+        .oneshot(get_authed("/v1/blocks/42", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -342,7 +398,7 @@ async fn blocks_by_number_returns_404_on_unknown_number() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/999999"))
+        .oneshot(get_authed("/v1/blocks/999999", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -358,7 +414,7 @@ async fn blocks_by_number_rejects_non_numeric_path() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/abc"))
+        .oneshot(get_authed("/v1/blocks/abc", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -374,7 +430,7 @@ async fn blocks_by_number_rejects_negative_path() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/-1"))
+        .oneshot(get_authed("/v1/blocks/-1", &harness.bearer))
         .await
         .expect("serve request");
 
@@ -408,7 +464,7 @@ async fn cells_requires_exactly_one_filter() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/cells"))
+        .oneshot(get_authed("/v1/cells", &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -423,7 +479,7 @@ async fn cells_requires_exactly_one_filter() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -436,7 +492,7 @@ async fn cells_rejects_invalid_lock_hash() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/cells?lock_hash=not-hex"))
+        .oneshot(get_authed("/v1/cells?lock_hash=not-hex", &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -452,7 +508,7 @@ async fn cells_returns_empty_page_on_unknown_lock() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -477,7 +533,7 @@ async fn cells_by_lock_hash_returns_matching_cells() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -513,7 +569,7 @@ async fn cells_include_data_toggle() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -552,7 +608,7 @@ async fn cells_is_live_filter() {
         harness
             .app
             .clone()
-            .oneshot(get(&format!("{base}&is_live=true")))
+            .oneshot(get_authed(&format!("{base}&is_live=true"), &harness.bearer))
             .await
             .expect("serve")
             .into_body(),
@@ -570,7 +626,10 @@ async fn cells_is_live_filter() {
         harness
             .app
             .clone()
-            .oneshot(get(&format!("{base}&is_live=false")))
+            .oneshot(get_authed(
+                &format!("{base}&is_live=false"),
+                &harness.bearer,
+            ))
             .await
             .expect("serve")
             .into_body(),
@@ -628,7 +687,7 @@ async fn cells_pagination_returns_every_row_exactly_once() {
             harness
                 .app
                 .clone()
-                .oneshot(get(&uri))
+                .oneshot(get_authed(&uri, &harness.bearer))
                 .await
                 .expect("serve")
                 .into_body(),
@@ -675,7 +734,7 @@ async fn cells_rejects_invalid_cursor() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -691,7 +750,7 @@ async fn cells_rejects_limit_above_max() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -707,7 +766,7 @@ async fn cells_rejects_limit_zero() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -730,7 +789,7 @@ async fn cells_by_type_hash_returns_matching_cells() {
     let response = harness
         .app
         .clone()
-        .oneshot(get(&uri))
+        .oneshot(get_authed(&uri, &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -753,7 +812,7 @@ async fn stats_returns_cached_tip_snapshot() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/stats"))
+        .oneshot(get_authed("/v1/stats", &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -772,7 +831,7 @@ async fn stats_reports_stale_snapshot_on_empty_tracker() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/stats"))
+        .oneshot(get_authed("/v1/stats", &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::OK);
@@ -833,7 +892,7 @@ async fn tip_header_absent_on_error_responses() {
     let response = harness
         .app
         .clone()
-        .oneshot(get("/v1/blocks/abc"))
+        .oneshot(get_authed("/v1/blocks/abc", &harness.bearer))
         .await
         .expect("serve request");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -853,7 +912,7 @@ async fn cells_meta_reads_tip_from_tracker() {
         harness
             .app
             .clone()
-            .oneshot(get(&uri))
+            .oneshot(get_authed(&uri, &harness.bearer))
             .await
             .expect("serve request")
             .into_body(),
@@ -861,6 +920,127 @@ async fn cells_meta_reads_tip_from_tracker() {
     .await;
     assert_eq!(body["meta"]["indexer_tip"], 50);
     assert_eq!(body["meta"]["node_tip"], 52);
+}
+
+// ---------------------------------------------------------------------------
+// auth (Bearer)
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_route_rejects_missing_authorization_header() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/blocks/latest"))
+        .await
+        .expect("serve request");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "unauthorized");
+    assert_eq!(body["error"]["message"], "unauthorized");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_route_rejects_non_bearer_scheme() {
+    let harness = up().await;
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/blocks/latest")
+        .header("authorization", "Basic dXNlcjpwYXNz")
+        .body(Body::empty())
+        .expect("request");
+    let response = harness.app.clone().oneshot(req).await.expect("serve");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_route_rejects_unknown_prefix() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed(
+            "/v1/blocks/latest",
+            "cell_deadbeef_0000000000000000000000000000000a",
+        ))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_route_rejects_wrong_secret_for_known_prefix() {
+    let harness = up().await;
+    let issued = api_keys_helper::generate().expect("generate");
+    api_keys::insert(
+        &harness.pool,
+        &issued.prefix,
+        &issued.secret_hash,
+        ApiKeyTier::Free,
+        None,
+    )
+    .await
+    .expect("insert");
+
+    // Same prefix, but a fresh (different) secret tail.
+    let other = api_keys_helper::generate().expect("generate other");
+    let bearer = format!("{}_{}", issued.prefix, other.secret);
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &bearer))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_route_rejects_revoked_key_after_cache_expiry() {
+    // The harness pre-issues a key but does not exercise the cache-bypass
+    // path. Issue a separate key, revoke it, and present it before the
+    // verification cache has had a chance to populate.
+    let harness = up().await;
+    let issued = api_keys_helper::generate().expect("generate");
+    api_keys::insert(
+        &harness.pool,
+        &issued.prefix,
+        &issued.secret_hash,
+        ApiKeyTier::Free,
+        None,
+    )
+    .await
+    .expect("insert");
+    cellora_db::api_keys::revoke(&harness.pool, &issued.prefix)
+        .await
+        .expect("revoke");
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &issued.full))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn public_routes_remain_accessible_without_auth() {
+    let harness = up().await;
+
+    for path in ["/v1/health", "/v1/health/ready", "/v1/openapi.json"] {
+        let response = harness.app.clone().oneshot(get(path)).await.expect("serve");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "public path {path} returned {:?}",
+            response.status()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

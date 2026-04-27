@@ -72,6 +72,7 @@ utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash", "std"] }
 rand = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
+moka = { version = "0.12", features = ["future"] }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [
