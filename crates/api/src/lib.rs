@@ -23,6 +23,7 @@ pub mod error;
 pub mod graphql;
 pub mod hex;
 pub mod keys;
+pub mod metrics;
 pub mod openapi;
 pub mod pagination;
 pub mod ratelimit;
@@ -87,7 +88,8 @@ pub fn build_app(state: AppState) -> Router {
     let public = Router::new()
         .route("/v1/health", get(routes::health::liveness))
         .route("/v1/health/ready", get(routes::health::readiness))
-        .route("/v1/openapi.json", get(openapi_handler));
+        .route("/v1/openapi.json", get(openapi_handler))
+        .route("/metrics", get(metrics_handler));
 
     // The auth and rate-limit layers sit only on these sub-routers.
     // Public routes live in a separate `Router` that never composes with
@@ -120,8 +122,54 @@ pub fn build_app(state: AppState) -> Router {
         .merge(rest)
         .merge(graphql_router)
         .layer(from_fn_with_state(state.clone(), tip_headers))
+        .layer(from_fn_with_state(state.clone(), record_request_metrics))
         .layer(middleware)
         .with_state(state)
+}
+
+/// Serve the Prometheus text-format snapshot. Public route — operators
+/// are expected to IP-restrict it at the edge (Cloudflare, ingress) in
+/// production rather than rely on the application for access control.
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Snapshot pool stats once per scrape so the `db_pool_*` gauges
+    // reflect the moment the scrape was taken, not request-driven.
+    let active = state.db.size();
+    let idle = u32::try_from(state.db.num_idle()).unwrap_or(u32::MAX);
+    state.metrics.record_pool(active, idle);
+    (
+        [("content-type", "text/plain; version=0.0.4")],
+        state.metrics.render(),
+    )
+}
+
+/// Outermost-but-one middleware that records every request's outcome
+/// against the Prometheus registry. Sits outside the auth/rate-limit
+/// layers so requests that are rejected at those layers still show up
+/// in `api_requests_total` — operators want to see the 401 / 429 rate.
+async fn record_request_metrics(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response<Body> {
+    // The `/metrics` endpoint counts itself; the volume is one request
+    // per scrape interval (typically 15s) so the noise is negligible
+    // and excluding it would just complicate the middleware.
+    let method = request.method().as_str().to_owned();
+    let matched_path = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|m| m.as_str().to_owned())
+        .unwrap_or_else(|| request.uri().path().to_owned());
+
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let elapsed = started.elapsed().as_secs_f64();
+    let status = response.status().as_u16();
+
+    state
+        .metrics
+        .observe_request(&method, &matched_path, status, elapsed);
+    response
 }
 
 /// Wire-format shape of a GraphQL request body. Mirrors the standard
@@ -221,10 +269,21 @@ async fn rate_limit_for(
         }
     };
 
+    let surface_label = match surface {
+        ratelimit::Surface::Rest => "rest",
+        ratelimit::Surface::Graphql => "graphql",
+    };
+    let tier_label = key.tier.as_str();
+
     let Some(limiter) = state.rate_limiter.as_ref() else {
         // No limiter configured — fail open. Logged at DEBUG so
         // operators can spot prolonged misconfiguration.
         tracing::debug!(prefix = %key.prefix, "rate limiter unavailable, allowing");
+        state.metrics.observe_rate_limit(
+            surface_label,
+            tier_label,
+            metrics::RateLimitOutcome::FailOpen,
+        );
         return next.run(request).await;
     };
 
@@ -235,15 +294,30 @@ async fn rate_limit_for(
         Err(err) => {
             if limiter.fails_open() {
                 tracing::warn!(error = %err, "rate limiter unreachable, failing open");
+                state.metrics.observe_rate_limit(
+                    surface_label,
+                    tier_label,
+                    metrics::RateLimitOutcome::FailOpen,
+                );
                 return next.run(request).await;
             }
             tracing::error!(error = %err, "rate limiter unreachable, failing closed");
+            state.metrics.observe_rate_limit(
+                surface_label,
+                tier_label,
+                metrics::RateLimitOutcome::FailClosed,
+            );
             return error::ApiError::UpstreamUnavailable("rate limiter unreachable")
                 .into_response();
         }
     };
 
     if !decision.allowed {
+        state.metrics.observe_rate_limit(
+            surface_label,
+            tier_label,
+            metrics::RateLimitOutcome::Limited,
+        );
         let mut response = error::ApiError::RateLimited {
             retry_after_seconds: decision.retry_after_seconds,
         }
@@ -257,6 +331,11 @@ async fn rate_limit_for(
         return response;
     }
 
+    state.metrics.observe_rate_limit(
+        surface_label,
+        tier_label,
+        metrics::RateLimitOutcome::Allowed,
+    );
     let mut response = next.run(request).await;
     attach_rate_limit_headers(&mut response, &decision);
     response

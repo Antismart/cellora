@@ -75,6 +75,7 @@ clap = { version = "4", features = ["derive", "env"] }
 moka = { version = "0.12", features = ["future"] }
 redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 async-graphql = { version = "7", features = ["chrono"] }
+prometheus = { version = "0.13", default-features = false }
 
 # Database
 sqlx = { version = "0.8", default-features = false, features = [

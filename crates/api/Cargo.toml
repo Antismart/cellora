@@ -48,6 +48,7 @@ rand = { workspace = true }
 clap = { workspace = true }
 moka = { workspace = true }
 redis = { workspace = true }
+prometheus = { workspace = true }
 async-graphql = { workspace = true }
 
 [dev-dependencies]

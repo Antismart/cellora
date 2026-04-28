@@ -43,6 +43,12 @@ pub struct Config {
     /// the database in a permanently wrong state.
     #[serde(default = "default_indexer_reorg_max_depth")]
     pub indexer_reorg_max_depth: u32,
+    /// Socket the indexer binary's metrics HTTP server binds to. The
+    /// API binary serves its `/metrics` from the main HTTP listener; the
+    /// indexer needs a separate port because it has no other HTTP
+    /// surface.
+    #[serde(default = "default_indexer_metrics_bind_addr")]
+    pub indexer_metrics_bind_addr: String,
     /// Tracing `EnvFilter` string.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -136,6 +142,10 @@ fn default_indexer_reorg_target_depth() -> u32 {
 
 fn default_indexer_reorg_max_depth() -> u32 {
     100
+}
+
+fn default_indexer_metrics_bind_addr() -> String {
+    "0.0.0.0:9100".to_owned()
 }
 
 fn default_log_level() -> String {

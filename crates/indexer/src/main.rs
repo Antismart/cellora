@@ -7,10 +7,13 @@
 //! - Poll the CKB node for new blocks and persist them.
 //! - Shut down gracefully on SIGINT / SIGTERM.
 
+use std::net::SocketAddr;
+
 use anyhow::Context;
 use cellora_common::{ckb::CkbClient, config::Config, logging};
 use cellora_db::{connect, migrate};
-use cellora_indexer::{app, shutdown};
+use cellora_indexer::metrics::Metrics;
+use cellora_indexer::{app, metrics_server, shutdown};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -56,15 +59,32 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let mut service = app::Service::new(pool, ckb, config.clone());
+    // One shared metrics bundle so the HTTP server and the poller see
+    // the same counters. A failure to bind the metrics listener is
+    // logged and the indexer carries on — observability shouldn't
+    // block ingestion.
+    let metrics = Metrics::new();
+    let metrics_bind: SocketAddr = config.indexer_metrics_bind_addr.parse().with_context(|| {
+        format!(
+            "parse indexer metrics bind address '{}'",
+            config.indexer_metrics_bind_addr
+        )
+    })?;
+    let metrics_handle = metrics_server::spawn(metrics.clone(), metrics_bind, cancel.clone());
+
+    let mut service = app::Service::new(pool, ckb, config.clone()).with_metrics(metrics);
     if let Some(manager) = redis {
         service = service.with_redis(manager);
     }
     let result = service.run(cancel.clone()).await;
 
-    // Ensure the signal listener exits even if the poller returned first.
+    // Ensure the signal listener and metrics server exit even if the
+    // poller returned first.
     cancel.cancel();
     let _ = shutdown_handle.await;
+    if let Err(err) = metrics_handle.await {
+        tracing::warn!(error = %err, "metrics server task join failed");
+    }
 
     match &result {
         Ok(()) => info!("cellora indexer stopped cleanly"),

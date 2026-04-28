@@ -96,6 +96,7 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         indexer_start_block: 0,
         indexer_reorg_target_depth: 12,
         indexer_reorg_max_depth: 100,
+        indexer_metrics_bind_addr: "0.0.0.0:0".into(),
         log_level: "warn".into(),
         log_format: LogFormat::Pretty,
         api_bind_addr: "0.0.0.0:0".into(),

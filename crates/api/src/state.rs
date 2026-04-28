@@ -11,6 +11,7 @@ use cellora_common::config::Config;
 use sqlx::PgPool;
 
 use crate::auth::AuthCache;
+use crate::metrics::Metrics;
 use crate::ratelimit::RateLimiter;
 use crate::tip::TipTracker;
 
@@ -30,6 +31,9 @@ pub struct AppState {
     /// could not be initialised at startup. A missing limiter is treated
     /// as fail-open by the middleware.
     pub rate_limiter: Option<RateLimiter>,
+    /// Prometheus metrics handles. Cheap to clone, shared across
+    /// middleware and the `/metrics` route.
+    pub metrics: Metrics,
 }
 
 impl AppState {
@@ -46,6 +50,7 @@ impl AppState {
             tip: TipTracker::new(),
             auth_cache,
             rate_limiter: None,
+            metrics: Metrics::new(),
         }
     }
 
@@ -63,6 +68,7 @@ impl AppState {
             tip,
             auth_cache,
             rate_limiter: None,
+            metrics: Metrics::new(),
         }
     }
 

@@ -266,6 +266,7 @@ fn test_config(database_url: &str) -> Config {
         indexer_start_block: 0,
         indexer_reorg_target_depth: 12,
         indexer_reorg_max_depth: 100,
+        indexer_metrics_bind_addr: "0.0.0.0:0".to_owned(),
         log_level: "info".to_owned(),
         log_format: LogFormat::Pretty,
         api_bind_addr: "0.0.0.0:0".to_owned(),
@@ -1258,6 +1259,117 @@ async fn graphql_validates_input_filters() {
     assert!(
         body["errors"].is_array(),
         "expected GraphQL errors array, got {body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// /metrics
+// ---------------------------------------------------------------------------
+
+async fn read_text(body: Body) -> String {
+    let bytes = body.collect().await.expect("collect").to_bytes();
+    String::from_utf8(bytes.to_vec()).expect("utf-8")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn metrics_endpoint_is_public_and_exposes_text_format() {
+    let harness = up().await;
+
+    // Drive at least one request through the middleware so the
+    // counters have a sample to serialise. Prometheus' text format
+    // omits metric families that have never been observed.
+    let _ = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health"))
+        .await
+        .expect("warmup");
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/metrics"))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .expect("content-type")
+            .to_str()
+            .unwrap(),
+        "text/plain; version=0.0.4"
+    );
+    let body = read_text(response.into_body()).await;
+    assert!(body.contains("api_requests_total"));
+    assert!(body.contains("api_request_duration_seconds"));
+    assert!(body.contains("db_pool_connections_active"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn metrics_count_authenticated_requests() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(0, 0xAB)).await;
+
+    // Make a successful request, then scrape /metrics and assert the
+    // counter shows up with status="200" and the matched route.
+    let _ = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+        .await
+        .expect("serve");
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/metrics"))
+        .await
+        .expect("serve metrics");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_text(response.into_body()).await;
+    assert!(
+        body.contains(r#"api_requests_total{method="GET",path="/v1/blocks/latest",status="200"}"#),
+        "metric line missing in:\n{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn metrics_record_rate_limit_decisions() {
+    let harness = up_with(HarnessOpts::defaults().small_free_burst(2)).await;
+    seed_block(&harness.pool, &make_block(0, 0xAB)).await;
+
+    // Drain the bucket — first two pass, third gets 429.
+    for _ in 0..3 {
+        let _ = harness
+            .app
+            .clone()
+            .oneshot(get_authed("/v1/blocks/latest", &harness.bearer))
+            .await
+            .expect("serve");
+    }
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/metrics"))
+        .await
+        .expect("serve metrics");
+    let body = read_text(response.into_body()).await;
+    // Prometheus serialises labels alphabetically (outcome, surface,
+    // tier), regardless of the declaration order on the metric.
+    assert!(
+        body.contains(
+            r#"api_rate_limit_decisions_total{outcome="allowed",surface="rest",tier="free"}"#
+        ),
+        "allowed line missing in:\n{body}"
+    );
+    assert!(
+        body.contains(
+            r#"api_rate_limit_decisions_total{outcome="limited",surface="rest",tier="free"}"#
+        ),
+        "limited line missing in:\n{body}"
     );
 }
 

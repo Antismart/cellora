@@ -18,6 +18,7 @@ use tokio::time::{sleep, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::metrics::Metrics;
 use crate::parser::{parse_block, ParseError};
 use crate::reorg::{self, ReorgError};
 
@@ -45,6 +46,7 @@ pub struct Poller {
     ckb: CkbClient,
     config: Config,
     redis: Option<ConnectionManager>,
+    metrics: Metrics,
 }
 
 impl Poller {
@@ -55,6 +57,7 @@ impl Poller {
             ckb,
             config,
             redis: None,
+            metrics: Metrics::new(),
         }
     }
 
@@ -63,6 +66,14 @@ impl Poller {
     /// publishing is best-effort and skipped silently when absent.
     pub fn with_redis(mut self, redis: ConnectionManager) -> Self {
         self.redis = Some(redis);
+        self
+    }
+
+    /// Replace the default in-process metrics bundle with a shared one
+    /// so the metrics HTTP server and the poller observe the same
+    /// counters / histograms.
+    pub fn with_metrics(mut self, metrics: Metrics) -> Self {
+        self.metrics = metrics;
         self
     }
 
@@ -149,13 +160,16 @@ impl Poller {
         checkpoint::upsert(&mut tx, parsed.block.number, &parsed.block.hash).await?;
         tx.commit().await.map_err(DbError::from)?;
 
+        let elapsed = start.elapsed();
+        self.metrics
+            .observe_block_indexed(parsed.block.number, elapsed.as_secs_f64());
         info!(
             block = parsed.block.number,
             hash = %hex::encode(&parsed.block.hash),
             txs = parsed.transactions.len(),
             cells = parsed.cells.len(),
             consumed = parsed.consumed.len(),
-            elapsed_ms = start.elapsed().as_millis() as u64,
+            elapsed_ms = elapsed.as_millis() as u64,
             "indexed block"
         );
         Ok(StepOutcome::Indexed)
@@ -180,6 +194,7 @@ impl Poller {
         let depth = suspect_height - ancestor.block_number + 1;
         let target = i64::from(self.config.indexer_reorg_target_depth);
         let max = i64::from(self.config.indexer_reorg_max_depth);
+        let oversized = depth > max;
 
         if depth > max {
             // Past the upper bound — log loudly but still complete.
@@ -213,6 +228,13 @@ impl Poller {
             indexed_hash_at_suspect,
         )
         .await?;
+
+        self.metrics
+            .observe_reorg(i64::from(outcome.depth), oversized);
+        // After a rollback the indexer's stored tip changes; reflect
+        // that in the gauge immediately so the metric does not lag
+        // until the next block lands.
+        self.metrics.set_latest_block(outcome.ancestor_height);
 
         info!(
             log_id = outcome.log_id,
