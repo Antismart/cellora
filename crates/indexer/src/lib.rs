@@ -7,4 +7,5 @@
 pub mod app;
 pub mod parser;
 pub mod poller;
+pub mod reorg;
 pub mod shutdown;

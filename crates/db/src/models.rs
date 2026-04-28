@@ -168,6 +168,43 @@ impl ApiKeyTier {
     }
 }
 
+/// State of a row in the `reorg_log` audit table.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
+#[sqlx(type_name = "reorg_status", rename_all = "snake_case")]
+pub enum ReorgStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl ReorgStatus {
+    /// Lower-cased label used in logs, metrics, and the API surface
+    /// (when a reorg log endpoint lands in a later week).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Read-side shape of a `reorg_log` row. One row per detected reorg.
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct ReorgLogEntry {
+    pub id: i64,
+    pub detected_at: DateTime<Utc>,
+    pub divergence_block_number: i64,
+    pub divergence_node_hash: Vec<u8>,
+    pub divergence_indexed_hash: Vec<u8>,
+    pub depth: i32,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub status: ReorgStatus,
+    pub error: Option<String>,
+}
+
 /// Read-side shape of an `api_keys` row. Created at issuance, hashed
 /// secret only — the plaintext secret is shown to the operator once at
 /// creation and never persisted.

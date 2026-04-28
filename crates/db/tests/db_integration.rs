@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use bigdecimal::BigDecimal;
 use cellora_db::models::{
-    ApiKeyTier, BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, TransactionRow,
+    ApiKeyTier, BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, ReorgStatus,
+    TransactionRow,
 };
-use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, transactions};
+use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, reorg_log, transactions};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
@@ -318,4 +319,179 @@ async fn api_key_touch_last_used_updates_timestamp() {
         .expect("lookup")
         .expect("row");
     assert!(after.last_used_at.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// reorg log + rollback primitives
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn block_hash_at_returns_stored_hash() {
+    let h = up().await;
+    let mut tx = h.pool.begin().await.expect("begin");
+    blocks::insert(&mut *tx, &block_row(7, 0xAA))
+        .await
+        .expect("insert");
+    tx.commit().await.expect("commit");
+
+    let hash = blocks::hash_at(&h.pool, 7).await.expect("hash_at");
+    assert_eq!(hash, Some(vec![0xAA; 32]));
+    let missing = blocks::hash_at(&h.pool, 99).await.expect("hash_at miss");
+    assert!(missing.is_none());
+}
+
+#[tokio::test]
+async fn delete_above_cascades_to_transactions_and_cells() {
+    let h = up().await;
+    let mut tx = h.pool.begin().await.expect("begin");
+    for n in 0..=3 {
+        blocks::insert(&mut *tx, &block_row(n, 0x10 + n as u8))
+            .await
+            .expect("insert block");
+    }
+    let tx0 = tx_row(0xA0, 0);
+    let tx2 = tx_row(0xA2, 2);
+    transactions::insert_batch(&mut tx, &[tx0.clone(), tx2.clone()])
+        .await
+        .expect("insert txs");
+    cells::insert_batch(
+        &mut tx,
+        &[cell_row(0xA0, 0, 0, 0x70), cell_row(0xA2, 2, 0, 0x71)],
+    )
+    .await
+    .expect("insert cells");
+    let removed = blocks::delete_above(&mut tx, 1)
+        .await
+        .expect("delete_above");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(removed, 2, "blocks 2 and 3 removed");
+    let remaining_blocks = sqlx::query!("SELECT count(*) AS n FROM blocks")
+        .fetch_one(&h.pool)
+        .await
+        .expect("count")
+        .n
+        .unwrap_or(0);
+    assert_eq!(remaining_blocks, 2, "blocks 0 and 1 remain");
+
+    let txs_for_block_2 =
+        sqlx::query!("SELECT count(*) AS n FROM transactions WHERE block_number = 2")
+            .fetch_one(&h.pool)
+            .await
+            .expect("count")
+            .n
+            .unwrap_or(0);
+    assert_eq!(txs_for_block_2, 0, "tx in block 2 was cascaded away");
+
+    let cells_for_block_2 = sqlx::query!("SELECT count(*) AS n FROM cells WHERE block_number = 2")
+        .fetch_one(&h.pool)
+        .await
+        .expect("count")
+        .n
+        .unwrap_or(0);
+    assert_eq!(cells_for_block_2, 0, "cell in block 2 was cascaded away");
+}
+
+#[tokio::test]
+async fn restore_consumed_above_clears_consumed_columns() {
+    let h = up().await;
+
+    // Block 0 produces a cell, block 1 consumes it. Rolling back to
+    // ancestor=0 should restore the cell to live.
+    let mut tx = h.pool.begin().await.expect("begin");
+    blocks::insert(&mut *tx, &block_row(0, 0x10))
+        .await
+        .expect("block0");
+    blocks::insert(&mut *tx, &block_row(1, 0x11))
+        .await
+        .expect("block1");
+    let tx_create = tx_row(0xCC, 0);
+    let tx_consume = tx_row(0xDD, 1);
+    transactions::insert_batch(&mut tx, &[tx_create.clone(), tx_consume.clone()])
+        .await
+        .expect("txs");
+    let cell = cell_row(0xCC, 0, 0, 0x99);
+    cells::insert_batch(&mut tx, std::slice::from_ref(&cell))
+        .await
+        .expect("cells");
+    cells::mark_consumed(
+        &mut tx,
+        &[ConsumedCellRef {
+            tx_hash: cell.tx_hash.clone(),
+            output_index: 0,
+            consumed_by_tx_hash: tx_consume.hash.clone(),
+            consumed_by_input_index: 0,
+            consumed_at_block_number: 1,
+        }],
+    )
+    .await
+    .expect("consume");
+    tx.commit().await.expect("commit");
+
+    let mut tx = h.pool.begin().await.expect("begin");
+    let restored = cells::restore_consumed_above(&mut tx, 0)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+    assert_eq!(restored, 1);
+
+    let row = sqlx::query!(
+        "SELECT consumed_by_tx_hash, consumed_by_input_index, consumed_at_block_number \
+         FROM cells WHERE tx_hash = $1 AND output_index = 0",
+        &cell.tx_hash,
+    )
+    .fetch_one(&h.pool)
+    .await
+    .expect("fetch");
+    assert!(row.consumed_by_tx_hash.is_none(), "tx hash cleared");
+    assert!(row.consumed_by_input_index.is_none(), "input index cleared");
+    assert!(
+        row.consumed_at_block_number.is_none(),
+        "block number cleared"
+    );
+}
+
+#[tokio::test]
+async fn reorg_log_lifecycle() {
+    let h = up().await;
+
+    let mut tx = h.pool.begin().await.expect("begin");
+    let id = reorg_log::insert(&mut tx, 100, &[0xAA; 32], &[0xBB; 32], 3)
+        .await
+        .expect("insert");
+    reorg_log::mark_completed(&mut tx, id)
+        .await
+        .expect("mark completed");
+    tx.commit().await.expect("commit");
+
+    let rows = reorg_log::list_recent(&h.pool, 10).await.expect("list");
+    assert_eq!(rows.len(), 1);
+    let entry = &rows[0];
+    assert_eq!(entry.id, id);
+    assert_eq!(entry.divergence_block_number, 100);
+    assert_eq!(entry.divergence_node_hash, vec![0xAA; 32]);
+    assert_eq!(entry.divergence_indexed_hash, vec![0xBB; 32]);
+    assert_eq!(entry.depth, 3);
+    assert_eq!(entry.status, ReorgStatus::Completed);
+    assert!(entry.completed_at.is_some());
+    assert!(entry.error.is_none());
+}
+
+#[tokio::test]
+async fn reorg_log_failed_state_records_error() {
+    let h = up().await;
+
+    let mut tx = h.pool.begin().await.expect("begin");
+    let id = reorg_log::insert(&mut tx, 50, &[0x01; 32], &[0x02; 32], 1)
+        .await
+        .expect("insert");
+    reorg_log::mark_failed(&mut tx, id, "boom")
+        .await
+        .expect("mark failed");
+    tx.commit().await.expect("commit");
+
+    let rows = reorg_log::list_recent(&h.pool, 10).await.expect("list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, ReorgStatus::Failed);
+    assert_eq!(rows[0].error.as_deref(), Some("boom"));
 }

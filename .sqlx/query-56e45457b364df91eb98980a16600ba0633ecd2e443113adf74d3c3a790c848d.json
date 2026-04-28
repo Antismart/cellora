@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE cells\n        SET consumed_by_tx_hash = NULL,\n            consumed_by_input_index = NULL,\n            consumed_at_block_number = NULL\n        WHERE consumed_at_block_number > $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56e45457b364df91eb98980a16600ba0633ecd2e443113adf74d3c3a790c848d"
+}

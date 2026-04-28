@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE reorg_log\n        SET status = 'completed', completed_at = now()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bc1a5479cd7a2501dd5bedf584517984ceedc344e9ef9d85eef94519ed2dbb86"
+}

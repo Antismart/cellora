@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE reorg_log\n        SET status = 'failed', completed_at = now(), error = $2\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9145c2b63dffe57b1ded0b217da2056fd49f611b84b9145e1bad6c0454a16ae7"
+}

@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            id,\n            detected_at,\n            divergence_block_number,\n            divergence_node_hash,\n            divergence_indexed_hash,\n            depth,\n            completed_at,\n            status AS \"status: ReorgStatus\",\n            error\n        FROM reorg_log\n        ORDER BY detected_at DESC\n        LIMIT $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "detected_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "divergence_block_number",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "divergence_node_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "divergence_indexed_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "depth",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "completed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "status: ReorgStatus",
+        "type_info": {
+          "Custom": {
+            "name": "reorg_status",
+            "kind": {
+              "Enum": [
+                "in_progress",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "error",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "5367dceb6e97704094075b862c65a116dfb79828cddea531cfd3641ccd25f708"
+}

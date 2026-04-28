@@ -264,6 +264,8 @@ fn test_config(database_url: &str) -> Config {
         ckb_rpc_url: "http://localhost:0".to_owned(),
         poll_interval_ms: 2_000,
         indexer_start_block: 0,
+        indexer_reorg_target_depth: 12,
+        indexer_reorg_max_depth: 100,
         log_level: "info".to_owned(),
         log_format: LogFormat::Pretty,
         api_bind_addr: "0.0.0.0:0".to_owned(),

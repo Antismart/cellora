@@ -75,6 +75,31 @@ pub async fn insert_batch(tx: &mut Transaction<'_, Postgres>, rows: &[CellRow]) 
     Ok(())
 }
 
+/// Reset the `consumed_*` columns to `NULL` on every cell that was
+/// consumed at a block strictly greater than `ancestor`. Called during
+/// reorg rollback so cells that were spent on the now-orphaned chain
+/// return to live status. The corresponding consuming transactions and
+/// blocks are deleted by [`crate::blocks::delete_above`] via
+/// `ON DELETE CASCADE`.
+pub async fn restore_consumed_above(
+    tx: &mut Transaction<'_, Postgres>,
+    ancestor: i64,
+) -> DbResult<u64> {
+    let result = sqlx::query!(
+        r#"
+        UPDATE cells
+        SET consumed_by_tx_hash = NULL,
+            consumed_by_input_index = NULL,
+            consumed_at_block_number = NULL
+        WHERE consumed_at_block_number > $1
+        "#,
+        ancestor,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Mark each referenced cell as consumed by the given input.
 pub async fn mark_consumed(
     tx: &mut Transaction<'_, Postgres>,

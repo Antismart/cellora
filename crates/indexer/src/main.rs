@@ -39,7 +39,27 @@ async fn main() -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
     let shutdown_handle = shutdown::spawn(cancel.clone());
 
-    let service = app::Service::new(pool, ckb, config.clone());
+    // Best-effort Redis connection for publishing reorg events. A
+    // failure here is logged and the indexer carries on without
+    // publishing — the API's tip cache will eventually re-poll.
+    let redis = match redis::Client::open(config.redis_url.as_str()) {
+        Ok(client) => match redis::aio::ConnectionManager::new(client).await {
+            Ok(manager) => Some(manager),
+            Err(err) => {
+                tracing::warn!(error = %err, "redis connection manager failed; reorg events will not publish");
+                None
+            }
+        },
+        Err(err) => {
+            tracing::warn!(error = %err, "redis client construction failed; reorg events will not publish");
+            None
+        }
+    };
+
+    let mut service = app::Service::new(pool, ckb, config.clone());
+    if let Some(manager) = redis {
+        service = service.with_redis(manager);
+    }
     let result = service.run(cancel.clone()).await;
 
     // Ensure the signal listener exits even if the poller returned first.

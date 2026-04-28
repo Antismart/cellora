@@ -32,6 +32,17 @@ pub struct Config {
     /// Block number to start indexing from on a fresh database.
     #[serde(default)]
     pub indexer_start_block: u64,
+    /// Target depth a reorg rollback is sized for in the comfortable
+    /// case. Per CKB community guidance the practical floor is around
+    /// six blocks; twelve provides operational headroom.
+    #[serde(default = "default_indexer_reorg_target_depth")]
+    pub indexer_reorg_target_depth: u32,
+    /// Upper bound on reorg depth before the indexer logs an
+    /// `ERROR` and increments `reorg_oversized_total`. Reorgs deeper
+    /// than this are still rolled back — failing closed would leave
+    /// the database in a permanently wrong state.
+    #[serde(default = "default_indexer_reorg_max_depth")]
+    pub indexer_reorg_max_depth: u32,
     /// Tracing `EnvFilter` string.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -117,6 +128,14 @@ pub struct Config {
 
 fn default_poll_interval_ms() -> u64 {
     2000
+}
+
+fn default_indexer_reorg_target_depth() -> u32 {
+    12
+}
+
+fn default_indexer_reorg_max_depth() -> u32 {
+    100
 }
 
 fn default_log_level() -> String {

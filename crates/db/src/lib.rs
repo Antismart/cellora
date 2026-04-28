@@ -13,6 +13,7 @@ pub mod error;
 pub mod migrate;
 pub mod models;
 pub mod pool;
+pub mod reorg_log;
 pub mod transactions;
 
 pub use error::{DbError, DbResult};
