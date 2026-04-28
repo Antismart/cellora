@@ -108,6 +108,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
         .route("/v1/stats", get(routes::stats::stats))
+        .route("/v1/proofs/:tx_hash", get(routes::proofs::passthrough))
         .layer(from_fn_with_state(state.clone(), rate_limit_rest))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
 

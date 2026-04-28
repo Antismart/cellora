@@ -16,6 +16,7 @@ use crate::error::{ErrorBody, ErrorEnvelope};
 use crate::routes::blocks::BlockResponse;
 use crate::routes::cells::{CellResponse, CellsPage, ConsumedByResponse, PageMeta, ScriptResponse};
 use crate::routes::health::{CkbNodeStatus, HealthResponse, ReadyResponse};
+use crate::routes::proofs::ProofResponse;
 use crate::routes::stats::StatsResponse;
 
 /// Top-level OpenAPI document for the Cellora REST API.
@@ -33,6 +34,7 @@ use crate::routes::stats::StatsResponse;
         crate::routes::blocks::by_number,
         crate::routes::cells::list,
         crate::routes::stats::stats,
+        crate::routes::proofs::passthrough,
     ),
     components(schemas(
         HealthResponse,
@@ -45,6 +47,7 @@ use crate::routes::stats::StatsResponse;
         PageMeta,
         ScriptResponse,
         StatsResponse,
+        ProofResponse,
         ErrorEnvelope,
         ErrorBody,
     )),
@@ -53,6 +56,7 @@ use crate::routes::stats::StatsResponse;
         (name = "blocks", description = "Indexed block lookups."),
         (name = "cells", description = "Paginated cell queries by lock or type hash."),
         (name = "stats", description = "Indexer progress and lag."),
+        (name = "proofs", description = "Transaction inclusion proofs forwarded from the CKB node."),
     ),
 )]
 pub struct ApiDoc;

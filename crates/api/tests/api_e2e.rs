@@ -1165,7 +1165,150 @@ async fn cells_response_omits_lock_kind_for_unknown_script() {
     .await;
     let data = body["data"].as_array().expect("array");
     assert_eq!(data.len(), 1);
-    assert!(data[0].get("lock_kind").is_none(), "unknown script should not be tagged");
+    assert!(
+        data[0].get("lock_kind").is_none(),
+        "unknown script should not be tagged"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// /v1/proofs/:tx_hash
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proofs_returns_400_on_malformed_tx_hash() {
+    let harness = up().await;
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/v1/proofs/not-hex", &harness.bearer))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proofs_returns_503_when_no_ckb_client_configured() {
+    // Default harness leaves AppState's `ckb` as `None`.
+    let harness = up().await;
+    let path = format!("/v1/proofs/0x{}", "ab".repeat(32));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed(&path, &harness.bearer))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "upstream_unavailable");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proofs_passes_through_ckb_node_response() {
+    use wiremock::{
+        matchers::{body_partial_json, method, path as wpath},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let mock = MockServer::start().await;
+    let block_hash = format!("0x{}", "ee".repeat(32));
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_transaction_proof"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "block_hash": block_hash,
+                "witnesses_root": "0xaaaa",
+                "proof": { "indices": ["0x0"], "lemmas": ["0xbbbb"] }
+            }
+        })))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_header"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "hash": block_hash, "number": "0x10", "compact_target": "0x1d3fffff" }
+        })))
+        .mount(&mock)
+        .await;
+
+    let mock_uri = mock.uri();
+    let harness = up_with_state(HarnessOpts::defaults(), move |state, _, _| {
+        let ckb = CkbClient::new(mock_uri.clone()).expect("ckb client");
+        state.with_ckb(ckb)
+    })
+    .await;
+
+    let tx_hash = format!("0x{}", "ab".repeat(32));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed(
+            &format!("/v1/proofs/{tx_hash}"),
+            &harness.bearer,
+        ))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["tx_hash"], tx_hash);
+    assert_eq!(body["block_hash"], block_hash);
+    assert_eq!(body["block_header"]["number"], "0x10");
+    assert_eq!(body["proof"]["witnesses_root"], "0xaaaa");
+    // block_hash was hoisted out of the proof body.
+    assert!(body["proof"].get("block_hash").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proofs_returns_404_when_node_has_no_proof() {
+    use wiremock::{
+        matchers::{body_partial_json, method, path as wpath},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_transaction_proof"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": null
+        })))
+        .mount(&mock)
+        .await;
+
+    let mock_uri = mock.uri();
+    let harness = up_with_state(HarnessOpts::defaults(), move |state, _, _| {
+        let ckb = CkbClient::new(mock_uri.clone()).expect("ckb client");
+        state.with_ckb(ckb)
+    })
+    .await;
+
+    let tx_hash = format!("0x{}", "ab".repeat(32));
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed(
+            &format!("/v1/proofs/{tx_hash}"),
+            &harness.bearer,
+        ))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["error"]["code"], "not_found");
 }
 
 // ---------------------------------------------------------------------------

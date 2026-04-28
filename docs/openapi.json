@@ -238,6 +238,68 @@
         }
       }
     },
+    "/v1/proofs/{tx_hash}": {
+      "get": {
+        "tags": [
+          "proofs"
+        ],
+        "summary": "Handler for `GET /v1/proofs/:tx_hash`.",
+        "operationId": "passthrough",
+        "parameters": [
+          {
+            "name": "tx_hash",
+            "in": "path",
+            "description": "0x-prefixed 32-byte transaction hash.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inclusion proof and containing header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProofResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Path segment is not a valid 32-byte hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Node has no proof for this transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "CKB node unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/stats": {
       "get": {
         "tags": [
@@ -598,6 +660,33 @@
           }
         }
       },
+      "ProofResponse": {
+        "type": "object",
+        "description": "Wire-format envelope for a transaction inclusion proof.",
+        "required": [
+          "tx_hash",
+          "block_hash",
+          "block_header",
+          "proof"
+        ],
+        "properties": {
+          "block_hash": {
+            "type": "string",
+            "description": "Hash of the block containing the transaction, as reported by\nthe node's proof generator."
+          },
+          "block_header": {
+            "description": "Block header for `block_hash`. Forwarded verbatim from the\nnode's `get_header`."
+          },
+          "proof": {
+            "description": "Merkle proof body forwarded verbatim from the node's\n`get_transaction_proof` (`witnesses_root` + `proof`)."
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "The transaction hash the proof refers to. Echoed for clients\npipelining multiple lookups.",
+            "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
+          }
+        }
+      },
       "ReadyResponse": {
         "type": "object",
         "description": "Response body for the readiness endpoint. Each dependency is\nreported separately so an operator can see which one is failing\nwithout parsing log lines.",
@@ -715,6 +804,10 @@
     {
       "name": "stats",
       "description": "Indexer progress and lag."
+    },
+    {
+      "name": "proofs",
+      "description": "Transaction inclusion proofs forwarded from the CKB node."
     }
   ]
 }

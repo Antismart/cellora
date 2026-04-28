@@ -7,4 +7,5 @@
 pub mod blocks;
 pub mod cells;
 pub mod health;
+pub mod proofs;
 pub mod stats;

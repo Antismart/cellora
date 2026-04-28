@@ -115,10 +115,12 @@ impl CkbClient {
                 message: err.message,
             });
         }
-        let raw = envelope.result.ok_or_else(|| Error::CkbRpc {
-            code: 0,
-            message: format!("missing result for method {method}"),
-        })?;
+        // A JSON-RPC 2.0 response is well-formed when `error` is absent,
+        // even if `result` is `null` (legitimately, for "not found"
+        // shaped responses). Treat a missing `result` field the same
+        // as an explicit null so callers can detect it via
+        // `Value::Null` rather than getting an error.
+        let raw = envelope.result.unwrap_or(Value::Null);
         serde_json::from_value(raw).map_err(Error::from)
     }
 }
