@@ -334,6 +334,9 @@ fn test_config(database_url: &str) -> Config {
         api_rate_limit_starter_graphql_refill_per_sec: 10.0,
         api_rate_limit_pro_graphql_burst: 1_000,
         api_rate_limit_pro_graphql_refill_per_sec: 100.0,
+        otel_otlp_endpoint: None,
+        otel_sample_ratio: 0.1,
+        otel_service_name: None,
     }
 }
 

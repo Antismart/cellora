@@ -120,6 +120,9 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         api_rate_limit_starter_graphql_refill_per_sec: 10.0,
         api_rate_limit_pro_graphql_burst: 1_000,
         api_rate_limit_pro_graphql_refill_per_sec: 100.0,
+        otel_otlp_endpoint: None,
+        otel_sample_ratio: 0.1,
+        otel_service_name: None,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);

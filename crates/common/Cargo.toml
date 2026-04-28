@@ -26,6 +26,10 @@ ckb-types = { workspace = true }
 ckb-hash = { workspace = true }
 hex = { workspace = true }
 url = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

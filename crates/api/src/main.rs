@@ -15,6 +15,7 @@ use cellora_api::admin::{self, Cli, Command};
 use cellora_api::ratelimit::RateLimiter;
 use cellora_api::tip::{spawn_refresh_task, TipTracker};
 use cellora_api::{build_app, AppState};
+use cellora_common::logging::OtelConfig;
 use cellora_common::{ckb::CkbClient, config::Config, logging};
 use cellora_db::connect;
 use clap::Parser;
@@ -30,7 +31,12 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let config = Config::from_env().context("load configuration")?;
-    logging::init(&config.log_level, config.log_format).context("initialise logging")?;
+    let _tracing_guard = logging::init(
+        &config.log_level,
+        config.log_format,
+        Some(OtelConfig::from_config(&config, "cellora-api")),
+    )
+    .context("initialise logging")?;
 
     match cli.command {
         Some(Command::Admin { action }) => {

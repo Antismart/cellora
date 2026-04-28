@@ -10,6 +10,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use cellora_common::logging::OtelConfig;
 use cellora_common::{ckb::CkbClient, config::Config, logging};
 use cellora_db::{connect, migrate};
 use cellora_indexer::metrics::Metrics;
@@ -23,7 +24,12 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
 
     let config = Config::from_env().context("load configuration")?;
-    logging::init(&config.log_level, config.log_format).context("initialise logging")?;
+    let _tracing_guard = logging::init(
+        &config.log_level,
+        config.log_format,
+        Some(OtelConfig::from_config(&config, "cellora-indexer")),
+    )
+    .context("initialise logging")?;
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

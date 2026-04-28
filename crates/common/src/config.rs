@@ -49,6 +49,23 @@ pub struct Config {
     /// surface.
     #[serde(default = "default_indexer_metrics_bind_addr")]
     pub indexer_metrics_bind_addr: String,
+
+    /// OTLP HTTP endpoint for OpenTelemetry trace export, e.g.
+    /// `http://otel-collector:4318`. When unset, no exporter is
+    /// configured and only the existing `tracing-subscriber` formatter
+    /// runs. Setting this is the only knob operators flip to opt into
+    /// tracing.
+    #[serde(default)]
+    pub otel_otlp_endpoint: Option<String>,
+    /// Sample ratio for trace recording. `0.0` records nothing, `1.0`
+    /// records every span. Defaults to `0.1` (10%) — typical
+    /// production setting.
+    #[serde(default = "default_otel_sample_ratio")]
+    pub otel_sample_ratio: f64,
+    /// `service.name` resource attribute. When unset, the binary
+    /// supplies its own default (e.g. `cellora-api` / `cellora-indexer`).
+    #[serde(default)]
+    pub otel_service_name: Option<String>,
     /// Tracing `EnvFilter` string.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -146,6 +163,10 @@ fn default_indexer_reorg_max_depth() -> u32 {
 
 fn default_indexer_metrics_bind_addr() -> String {
     "0.0.0.0:9100".to_owned()
+}
+
+fn default_otel_sample_ratio() -> f64 {
+    0.1
 }
 
 fn default_log_level() -> String {
