@@ -557,6 +557,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "utoipa",
+ "wiremock",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ use cellora_api::keys as api_keys_helper;
 use cellora_api::ratelimit::RateLimiter;
 use cellora_api::tip::{TipSnapshot, TipTracker};
 use cellora_api::{build_app, AppState};
+use cellora_common::ckb::CkbClient;
 use cellora_common::config::{Config, LogFormat};
 use cellora_db::models::{ApiKeyTier, BlockRow, CellRow, ConsumedCellRef, HashType};
 use cellora_db::{api_keys, blocks, cells, connect, migrate};
@@ -100,7 +101,55 @@ async fn up() -> Harness {
     up_with(HarnessOpts::defaults()).await
 }
 
+/// Build a harness, then let the caller mutate the constructed
+/// [`AppState`] before it is wrapped in the router. The closure
+/// receives `(state, ckb_url_unused, redis_manager)` — the unused
+/// argument is reserved for symmetry with the Redis container case
+/// and may carry future test-only knobs.
+async fn up_with_state<F>(opts: HarnessOpts, customise: F) -> Harness
+where
+    F: FnOnce(AppState, Option<String>, Option<redis::aio::ConnectionManager>) -> AppState,
+{
+    let (mut state, pool, tip, bearer, pg, redis_container, redis_manager) =
+        build_state(opts).await;
+    state = customise(state, None, redis_manager);
+    let app = build_app(state);
+    Harness {
+        app,
+        pool,
+        tip,
+        bearer,
+        _pg: pg,
+        _redis: redis_container,
+    }
+}
+
 async fn up_with(opts: HarnessOpts) -> Harness {
+    let (state, pool, tip, bearer, pg, redis_container, _) = build_state(opts).await;
+    let app = build_app(state);
+    Harness {
+        app,
+        pool,
+        tip,
+        bearer,
+        _pg: pg,
+        _redis: redis_container,
+    }
+}
+
+/// Construct everything except the `axum::Router`. Returned as a tuple
+/// so the two harness builders can compose them without sharing state.
+async fn build_state(
+    opts: HarnessOpts,
+) -> (
+    AppState,
+    PgPool,
+    TipTracker,
+    String,
+    ContainerAsync<Postgres>,
+    Option<ContainerAsync<Redis>>,
+    Option<redis::aio::ConnectionManager>,
+) {
     let pg = Postgres::default()
         .with_tag("16-alpine")
         .start()
@@ -113,9 +162,6 @@ async fn up_with(opts: HarnessOpts) -> Harness {
     let pool = connect_with_retry(&url, 10).await;
     migrate::run(&pool).await.expect("migrate");
 
-    // Pre-issue a free-tier key so authenticated endpoints can be
-    // exercised by the existing test bodies. Specific auth-failure
-    // cases construct their own keys / headers.
     let issued = api_keys_helper::generate().expect("generate");
     api_keys::insert(
         &pool,
@@ -136,9 +182,7 @@ async fn up_with(opts: HarnessOpts) -> Harness {
     }
     config.api_rate_limit_fail_open = opts.fail_open;
 
-    // Start Redis (or not). If not, the limiter is never attached and
-    // the middleware's no-limiter fail-open path is exercised.
-    let (redis_container, limiter) = if opts.with_redis {
+    let (redis_container, redis_manager, limiter) = if opts.with_redis {
         let redis = Redis
             .with_tag("7-alpine")
             .start()
@@ -152,10 +196,10 @@ async fn up_with(opts: HarnessOpts) -> Harness {
         let manager = redis::aio::ConnectionManager::new(client)
             .await
             .expect("redis manager");
-        let limiter = RateLimiter::new(manager, config.api_rate_limit_fail_open);
-        (Some(redis), Some(limiter))
+        let limiter = RateLimiter::new(manager.clone(), config.api_rate_limit_fail_open);
+        (Some(redis), Some(manager), Some(limiter))
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let tip = TipTracker::new();
@@ -163,15 +207,15 @@ async fn up_with(opts: HarnessOpts) -> Harness {
     if let Some(l) = limiter {
         state = state.with_rate_limiter(l);
     }
-    let app = build_app(state);
-    Harness {
-        app,
+    (
+        state,
         pool,
         tip,
-        bearer: issued.full,
-        _pg: pg,
-        _redis: redis_container,
-    }
+        issued.full,
+        pg,
+        redis_container,
+        redis_manager,
+    )
 }
 
 fn fresh_tip(indexer_tip: Option<i64>, node_tip: Option<u64>) -> TipSnapshot {
@@ -350,6 +394,154 @@ async fn readiness_returns_ok_when_db_is_healthy() {
     let body = read_json(response.into_body()).await;
     assert_eq!(body["status"], "ready");
     assert_eq!(body["db"], "ok");
+    // The default harness does not attach a Redis manager or a CKB
+    // client to AppState — those probes are reported as "skipped"
+    // and do not fail the response.
+    assert_eq!(body["redis"], "skipped");
+    assert_eq!(body["ckb_node"]["state"], "skipped");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn readiness_reports_redis_when_attached() {
+    // Build the harness with the default Redis container, then attach
+    // its connection manager to AppState so the readiness probe can
+    // ping it.
+    let harness = up_with_state(HarnessOpts::defaults(), |state, _ckb_url, redis_manager| {
+        let mut state = state;
+        if let Some(m) = redis_manager {
+            state = state.with_redis(m);
+        }
+        state
+    })
+    .await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health/ready"))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["redis"], "ok");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn readiness_reports_ckb_node_synced_when_chain_info_returns_false_for_ibd() {
+    use wiremock::{
+        matchers::{body_partial_json, method, path as wpath},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_blockchain_info"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "chain": "ckb_dev",
+                "median_time": "0x0",
+                "epoch": "0x0",
+                "difficulty": "0x1",
+                "is_initial_block_download": false,
+                "alerts": []
+            }
+        })))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_tip_block_number"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0x2a"
+        })))
+        .mount(&mock)
+        .await;
+
+    let mock_uri = mock.uri();
+    let harness = up_with_state(HarnessOpts::defaults(), move |state, _, _| {
+        let ckb = CkbClient::new(mock_uri.clone()).expect("ckb client");
+        state.with_ckb(ckb)
+    })
+    .await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health/ready"))
+        .await
+        .expect("serve");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["ckb_node"]["state"], "ok");
+    assert_eq!(body["ckb_node"]["tip"], 42);
+    assert_eq!(body["ckb_node"]["is_synced"], true);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn readiness_reports_ckb_node_not_synced_during_initial_block_download() {
+    use wiremock::{
+        matchers::{body_partial_json, method, path as wpath},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_blockchain_info"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "chain": "ckb_dev",
+                "median_time": "0x0",
+                "epoch": "0x0",
+                "difficulty": "0x1",
+                "is_initial_block_download": true,
+                "alerts": []
+            }
+        })))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(wpath("/"))
+        .and(body_partial_json(
+            serde_json::json!({"method": "get_tip_block_number"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "result": "0xa"
+        })))
+        .mount(&mock)
+        .await;
+
+    let mock_uri = mock.uri();
+    let harness = up_with_state(HarnessOpts::defaults(), move |state, _, _| {
+        let ckb = CkbClient::new(mock_uri.clone()).expect("ckb client");
+        state.with_ckb(ckb)
+    })
+    .await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/v1/health/ready"))
+        .await
+        .expect("serve");
+    // IBD is not a 503 — a node still in catch-up is "reachable but
+    // behind", and refusing to be ready in that state would prevent
+    // the API from coming online during catch-up.
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["ckb_node"]["state"], "ok");
+    assert_eq!(body["ckb_node"]["is_synced"], false);
 }
 
 #[tokio::test(flavor = "multi_thread")]

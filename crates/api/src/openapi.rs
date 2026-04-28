@@ -15,7 +15,7 @@ use utoipa::OpenApi;
 use crate::error::{ErrorBody, ErrorEnvelope};
 use crate::routes::blocks::BlockResponse;
 use crate::routes::cells::{CellResponse, CellsPage, ConsumedByResponse, PageMeta, ScriptResponse};
-use crate::routes::health::{HealthResponse, ReadyResponse};
+use crate::routes::health::{CkbNodeStatus, HealthResponse, ReadyResponse};
 use crate::routes::stats::StatsResponse;
 
 /// Top-level OpenAPI document for the Cellora REST API.
@@ -37,6 +37,7 @@ use crate::routes::stats::StatsResponse;
     components(schemas(
         HealthResponse,
         ReadyResponse,
+        CkbNodeStatus,
         BlockResponse,
         CellResponse,
         CellsPage,

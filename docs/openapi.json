@@ -212,11 +212,11 @@
         "tags": [
           "health"
         ],
-        "summary": "Handler for `GET /v1/health/ready`. Returns 200 when the database pool\nanswers, 503 otherwise. The response body names the failing dependency.",
+        "summary": "Handler for `GET /v1/health/ready`. Probes each configured\ndependency concurrently with a 1-second timeout per probe. Returns\n200 when every required dependency answered, 503 when any did not.\nCKB IBD does **not** flip the response to 503 — `is_synced: false`\nis reported in a 200.",
         "operationId": "readiness",
         "responses": {
           "200": {
-            "description": "All dependencies reachable",
+            "description": "All required dependencies reachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -226,7 +226,7 @@
             }
           },
           "503": {
-            "description": "One or more dependencies unreachable",
+            "description": "One or more required dependencies unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -454,6 +454,33 @@
           }
         }
       },
+      "CkbNodeStatus": {
+        "type": "object",
+        "description": "CKB node probe result. `state == \"skipped\"` when no client was\nattached; `state == \"error\"` when the node was unreachable; `\"ok\"`\nwhen `get_blockchain_info` returned. `is_synced` is `false` when the\nnode is in initial block download — operators are expected to alert\non `indexer_lag_blocks` separately.",
+        "required": [
+          "state",
+          "is_synced"
+        ],
+        "properties": {
+          "is_synced": {
+            "type": "boolean",
+            "description": "`false` when the node is in initial block download."
+          },
+          "state": {
+            "type": "string",
+            "description": "`\"ok\"`, `\"error\"`, or `\"skipped\"`."
+          },
+          "tip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Tip height the node reported, when reachable.",
+            "minimum": 0
+          }
+        }
+      },
       "ConsumedByResponse": {
         "type": "object",
         "description": "Where a cell was consumed. `None` for live cells.",
@@ -557,19 +584,29 @@
       },
       "ReadyResponse": {
         "type": "object",
-        "description": "Response body for the readiness endpoint.",
+        "description": "Response body for the readiness endpoint. Each dependency is\nreported separately so an operator can see which one is failing\nwithout parsing log lines.",
         "required": [
           "status",
-          "db"
+          "db",
+          "redis",
+          "ckb_node"
         ],
         "properties": {
+          "ckb_node": {
+            "$ref": "#/components/schemas/CkbNodeStatus",
+            "description": "State of the CKB upstream node and its sync progress."
+          },
           "db": {
             "type": "string",
-            "description": "`\"ok\"` or an error message, for the Postgres pool."
+            "description": "State of the Postgres pool — `\"ok\"` or `\"error\"`."
+          },
+          "redis": {
+            "type": "string",
+            "description": "State of the Redis connection — `\"ok\"`, `\"error\"`, or\n`\"skipped\"` when no Redis client was attached at startup."
           },
           "status": {
             "type": "string",
-            "description": "`\"ready\"` when all dependencies succeeded, `\"not_ready\"` otherwise."
+            "description": "`\"ready\"` when every required dependency answered, `\"not_ready\"`\notherwise."
           }
         }
       },

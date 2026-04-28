@@ -74,12 +74,24 @@ async fn main() -> anyhow::Result<()> {
         cancel.clone(),
     );
 
-    // Construct the Redis-backed rate limiter. A failed connection at
-    // boot is logged but does not abort startup — the API serves
-    // fail-open until Redis is reachable.
-    let rate_limiter = build_rate_limiter(&config).await;
+    // Construct the Redis connection manager once and share it
+    // between the rate limiter and the readiness probe. A failed
+    // connection at boot is logged but does not abort startup — the
+    // API serves fail-open until Redis is reachable.
+    let redis_manager = build_redis_manager(&config).await;
+    let rate_limiter = redis_manager
+        .as_ref()
+        .map(|m| RateLimiter::new(m.clone(), config.api_rate_limit_fail_open));
 
-    let mut state = AppState::with_tip(pool, config, tip);
+    // Reuse the CkbClient already constructed for the tip-refresh task
+    // so the readiness probe and the tip cache hit the same node.
+    let ckb_for_state =
+        CkbClient::new(config.ckb_rpc_url.clone()).context("construct ckb client (state)")?;
+
+    let mut state = AppState::with_tip(pool, config, tip).with_ckb(ckb_for_state);
+    if let Some(manager) = redis_manager {
+        state = state.with_redis(manager);
+    }
     if let Some(limiter) = rate_limiter {
         state = state.with_rate_limiter(limiter);
     }
@@ -107,10 +119,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Best-effort construction of the rate limiter. Returns `None` when
-/// Redis is unreachable at boot — the service starts anyway and the
-/// limiter middleware fails open.
-async fn build_rate_limiter(config: &Config) -> Option<RateLimiter> {
+/// Best-effort construction of the Redis connection manager. Returns
+/// `None` when Redis is unreachable at boot — the service starts
+/// anyway, the rate limiter fails open, and the readiness probe
+/// reports `redis: "skipped"`.
+async fn build_redis_manager(config: &Config) -> Option<redis::aio::ConnectionManager> {
     let client = match redis::Client::open(config.redis_url.as_str()) {
         Ok(c) => c,
         Err(err) => {
@@ -119,7 +132,7 @@ async fn build_rate_limiter(config: &Config) -> Option<RateLimiter> {
         }
     };
     match redis::aio::ConnectionManager::new(client).await {
-        Ok(manager) => Some(RateLimiter::new(manager, config.api_rate_limit_fail_open)),
+        Ok(manager) => Some(manager),
         Err(err) => {
             tracing::warn!(error = %err, "redis connection manager failed at startup");
             None

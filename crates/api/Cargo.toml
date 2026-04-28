@@ -58,3 +58,4 @@ testcontainers-modules = { workspace = true }
 sqlx = { workspace = true }
 http-body-util = { workspace = true }
 bigdecimal = { workspace = true }
+wiremock = { workspace = true }

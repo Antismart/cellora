@@ -7,7 +7,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use cellora_common::ckb::CkbClient;
 use cellora_common::config::Config;
+use redis::aio::ConnectionManager;
 use sqlx::PgPool;
 
 use crate::auth::AuthCache;
@@ -16,7 +18,7 @@ use crate::ratelimit::RateLimiter;
 use crate::tip::TipTracker;
 
 /// Application state injected into every handler.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     /// Postgres connection pool.
     pub db: PgPool,
@@ -34,6 +36,25 @@ pub struct AppState {
     /// Prometheus metrics handles. Cheap to clone, shared across
     /// middleware and the `/metrics` route.
     pub metrics: Metrics,
+    /// Direct handle to Redis used by the readiness probe (the rate
+    /// limiter holds its own copy internally; that one is not exposed
+    /// for this purpose). `None` skips the probe.
+    pub redis: Option<ConnectionManager>,
+    /// CKB JSON-RPC client used by the readiness probe to check that
+    /// the upstream node is reachable and not in initial block
+    /// download. `None` skips the probe.
+    pub ckb: Option<CkbClient>,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppState")
+            .field("config", &self.config)
+            .field("rate_limiter_attached", &self.rate_limiter.is_some())
+            .field("redis_attached", &self.redis.is_some())
+            .field("ckb_attached", &self.ckb.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AppState {
@@ -51,6 +72,8 @@ impl AppState {
             auth_cache,
             rate_limiter: None,
             metrics: Metrics::new(),
+            redis: None,
+            ckb: None,
         }
     }
 
@@ -69,6 +92,8 @@ impl AppState {
             auth_cache,
             rate_limiter: None,
             metrics: Metrics::new(),
+            redis: None,
+            ckb: None,
         }
     }
 
@@ -77,6 +102,21 @@ impl AppState {
     /// requires an async Redis connection.
     pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
         self.rate_limiter = Some(limiter);
+        self
+    }
+
+    /// Attach a Redis connection so the readiness probe can ping it.
+    /// Independent of the rate limiter — both share the underlying
+    /// connection-manager `Arc`, but each has its own handle.
+    pub fn with_redis(mut self, redis: ConnectionManager) -> Self {
+        self.redis = Some(redis);
+        self
+    }
+
+    /// Attach a CKB JSON-RPC client so the readiness probe can verify
+    /// the upstream node is reachable and synced.
+    pub fn with_ckb(mut self, ckb: CkbClient) -> Self {
+        self.ckb = Some(ckb);
         self
     }
 }
