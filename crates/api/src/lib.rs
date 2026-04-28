@@ -28,6 +28,7 @@ pub mod openapi;
 pub mod pagination;
 pub mod ratelimit;
 pub mod routes;
+pub mod scripts;
 pub mod state;
 pub mod tip;
 

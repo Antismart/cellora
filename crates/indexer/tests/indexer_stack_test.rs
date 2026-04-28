@@ -123,6 +123,7 @@ async fn poller_indexes_a_single_block_and_stops_on_cancel() {
         otel_otlp_endpoint: None,
         otel_sample_ratio: 0.1,
         otel_service_name: None,
+        network: cellora_common::config::Network::Mainnet,
     };
     let cancel = CancellationToken::new();
     let poller = Poller::new(pool.clone(), ckb, config);

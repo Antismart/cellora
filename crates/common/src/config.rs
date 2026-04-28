@@ -19,6 +19,20 @@ pub enum LogFormat {
     Pretty,
 }
 
+/// CKB network the API is serving data for. Selects which entries from
+/// the well-known script registry are eligible to tag cells.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    /// Mainnet (lina). Default.
+    #[default]
+    Mainnet,
+    /// Public testnet (pudge).
+    Testnet,
+    /// Local dev chain — no well-known scripts apply.
+    Devnet,
+}
+
 /// Runtime configuration for every cellora service.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -66,6 +80,10 @@ pub struct Config {
     /// supplies its own default (e.g. `cellora-api` / `cellora-indexer`).
     #[serde(default)]
     pub otel_service_name: Option<String>,
+    /// CKB network being served. Drives which entries in the
+    /// well-known script registry are eligible to tag cells.
+    #[serde(default)]
+    pub network: Network,
     /// Tracing `EnvFilter` string.
     #[serde(default = "default_log_level")]
     pub log_level: String,

@@ -396,6 +396,14 @@
             "description": "Precomputed hash of the lock script.",
             "example": "0x0000000000000000000000000000000000000000000000000000000000000000"
           },
+          "lock_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Canonical short label for the lock script, when its\n`(code_hash, hash_type)` matches an entry in the well-known\nscript registry. Omitted for custom or unknown scripts.",
+            "example": "sighash"
+          },
           "output_index": {
             "type": "integer",
             "format": "int32",
@@ -423,6 +431,14 @@
               "null"
             ],
             "description": "Precomputed hash of the type script, or `None`."
+          },
+          "type_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Canonical short label for the type script. Omitted when the\ncell has no type script or the script is not in the registry.",
+            "example": "nervos_dao"
           }
         }
       },

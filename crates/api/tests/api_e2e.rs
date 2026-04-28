@@ -337,6 +337,7 @@ fn test_config(database_url: &str) -> Config {
         otel_otlp_endpoint: None,
         otel_sample_ratio: 0.1,
         otel_service_name: None,
+        network: cellora_common::config::Network::Mainnet,
     }
 }
 
@@ -1099,6 +1100,72 @@ async fn cells_by_type_hash_returns_matching_cells() {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["type_hash"], hex_prefixed(&TYPE_A));
     assert_eq!(data[0]["type"]["hash_type"], "data1");
+}
+
+// ---------------------------------------------------------------------------
+// well-known script registry
+// ---------------------------------------------------------------------------
+
+/// Canonical mainnet Sighash code_hash, copied from
+/// nervosnetwork/ckb-system-scripts.
+const SIGHASH_CODE_HASH: [u8; 32] = [
+    0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1, 0xb9,
+    0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3, 0xcc, 0xe8,
+];
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_response_tags_sighash_lock_with_lock_kind() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+    // Build a cell whose lock script is the canonical Sighash. The
+    // `make_cell` helper hardcodes lock_code_hash to a custom value;
+    // patch it to the registered Sighash and re-insert.
+    let mut cell = make_cell(0, 0x01, 0, LOCK_A, None);
+    cell.lock_code_hash = SIGHASH_CODE_HASH.to_vec();
+    cell.lock_hash_type = HashType::Type;
+    seed_cells(&harness.pool, &[cell]).await;
+
+    let uri = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+    let body = read_json(
+        harness
+            .app
+            .clone()
+            .oneshot(get_authed(&uri, &harness.bearer))
+            .await
+            .expect("serve")
+            .into_body(),
+    )
+    .await;
+    let data = body["data"].as_array().expect("array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["lock_kind"], "sighash");
+    // type_kind is omitted (not "null") because the cell has no type
+    // script.
+    assert!(data[0].get("type_kind").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_response_omits_lock_kind_for_unknown_script() {
+    let harness = up().await;
+    seed_block(&harness.pool, &make_block(0, 0xab)).await;
+    // The default `make_cell` sets a custom lock_code_hash that is not
+    // in the registry.
+    seed_cells(&harness.pool, &[make_cell(0, 0x01, 0, LOCK_A, None)]).await;
+
+    let uri = format!("/v1/cells?lock_hash={}", hex_prefixed(&LOCK_A));
+    let body = read_json(
+        harness
+            .app
+            .clone()
+            .oneshot(get_authed(&uri, &harness.bearer))
+            .await
+            .expect("serve")
+            .into_body(),
+    )
+    .await;
+    let data = body["data"].as_array().expect("array");
+    assert_eq!(data.len(), 1);
+    assert!(data[0].get("lock_kind").is_none(), "unknown script should not be tagged");
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@
 
 use axum::extract::{Query, State};
 use axum::Json;
+use cellora_common::config::Network;
 use cellora_db::cells::{self, CellCursor, LivenessFilter};
 use cellora_db::models::Cell;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,7 @@ use utoipa::{IntoParams, ToSchema};
 use crate::error::{ApiError, ApiResult, ErrorEnvelope};
 use crate::hex::{self as hex_helper, Hex, Hex32};
 use crate::pagination::{decode_cells_cursor, encode_cells_cursor};
+use crate::scripts::registry::{self as script_registry, ScriptSlot};
 use crate::state::AppState;
 
 /// Incoming query-string parameters for `GET /v1/cells`.
@@ -119,12 +121,23 @@ pub struct CellResponse {
     /// Precomputed hash of the lock script.
     #[schema(value_type = String, example = "0x0000000000000000000000000000000000000000000000000000000000000000")]
     pub lock_hash: Hex32,
+    /// Canonical short label for the lock script, when its
+    /// `(code_hash, hash_type)` matches an entry in the well-known
+    /// script registry. Omitted for custom or unknown scripts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, example = "sighash")]
+    pub lock_kind: Option<&'static str>,
     /// Type script, or `None` when the cell has no type script.
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
     /// Precomputed hash of the type script, or `None`.
     #[schema(value_type = Option<String>)]
     pub type_hash: Option<Hex32>,
+    /// Canonical short label for the type script. Omitted when the
+    /// cell has no type script or the script is not in the registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, example = "nervos_dao")]
+    pub type_kind: Option<&'static str>,
     /// Raw cell data. Present only when `include_data=true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(value_type = Option<String>, example = "0xdeadbeef")]
@@ -172,7 +185,7 @@ pub async fn list(
         }
     };
 
-    let (page, next_cursor) = build_page(cells, limit, params.include_data)?;
+    let (page, next_cursor) = build_page(cells, limit, params.include_data, state.config.network)?;
     let snap = state.tip.get();
 
     Ok(Json(CellsPage {
@@ -245,6 +258,7 @@ fn build_page(
     mut rows: Vec<Cell>,
     limit: u32,
     include_data: bool,
+    network: Network,
 ) -> Result<(Vec<CellResponse>, Option<String>), ApiError> {
     let has_more = rows.len() > limit as usize;
     if has_more {
@@ -265,16 +279,30 @@ fn build_page(
 
     let data = rows
         .into_iter()
-        .map(|row| render_cell(row, include_data))
+        .map(|row| render_cell(row, include_data, network))
         .collect::<Result<Vec<_>, _>>()?;
     Ok((data, next_cursor))
 }
 
-fn render_cell(row: Cell, include_data: bool) -> Result<CellResponse, ApiError> {
+fn render_cell(row: Cell, include_data: bool, network: Network) -> Result<CellResponse, ApiError> {
+    let lock_kind = script_registry::lookup(
+        network,
+        &row.lock_code_hash,
+        row.lock_hash_type,
+        ScriptSlot::Lock,
+    );
+
     let lock = ScriptResponse {
         code_hash: Hex32::try_from_slice(&row.lock_code_hash)?,
         hash_type: hash_type_label(row.lock_hash_type)?,
         args: Hex::new(row.lock_args),
+    };
+
+    let type_kind = match (row.type_code_hash.as_deref(), row.type_hash_type) {
+        (Some(code_hash), Some(hash_type)) => {
+            script_registry::lookup(network, code_hash, hash_type, ScriptSlot::Type)
+        }
+        _ => None,
     };
 
     let type_script = match (
@@ -318,8 +346,10 @@ fn render_cell(row: Cell, include_data: bool) -> Result<CellResponse, ApiError> 
         capacity_shannons: row.capacity_shannons,
         lock,
         lock_hash: Hex32::try_from_slice(&row.lock_hash)?,
+        lock_kind,
         type_script,
         type_hash,
+        type_kind,
         data: include_data.then(|| Hex::new(row.data)),
         is_live: consumed_by.is_none(),
         consumed_by,

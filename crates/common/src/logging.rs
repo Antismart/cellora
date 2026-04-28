@@ -225,6 +225,7 @@ mod tests {
             otel_otlp_endpoint: None,
             otel_sample_ratio: 0.1,
             otel_service_name: None,
+            network: crate::config::Network::Mainnet,
         };
         let cfg = OtelConfig::from_config(&config, "cellora-test");
         assert_eq!(cfg.service_name, "cellora-test");

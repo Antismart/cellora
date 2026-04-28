@@ -9,11 +9,13 @@
 //! resolvers run only after they pass.
 
 use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject};
+use cellora_common::config::Network;
 use cellora_db::cells::{self as db_cells, CellCursor, LivenessFilter};
 use cellora_db::models::Cell;
 
 use crate::error::ApiError;
 use crate::pagination::{decode_cells_cursor, encode_cells_cursor};
+use crate::scripts::registry::{self as script_registry, ScriptSlot};
 use crate::state::AppState;
 
 /// The full schema. Constructed once in `build_app` and shared across
@@ -100,7 +102,7 @@ impl QueryRoot {
         };
 
         let include_data = input.include_data.unwrap_or(false);
-        let (data, next_cursor) = build_page(rows, limit, include_data)?;
+        let (data, next_cursor) = build_page(rows, limit, include_data, state.config.network)?;
         let snap = state.tip.get();
         Ok(CellsConnection {
             data,
@@ -230,11 +232,16 @@ pub struct GraphCell {
     pub lock: Script,
     /// Precomputed lock-script hash.
     pub lock_hash: String,
+    /// Canonical short label for the lock script when registered, or
+    /// `null` for custom / unknown scripts.
+    pub lock_kind: Option<String>,
     /// Type script, or `null` when absent.
     #[graphql(name = "type")]
     pub type_script: Option<Script>,
     /// Precomputed type-script hash, or `null`.
     pub type_hash: Option<String>,
+    /// Canonical short label for the type script when registered.
+    pub type_kind: Option<String>,
     /// Raw cell data, present only when `includeData=true`.
     pub data: Option<String>,
     /// Whether the cell is live.
@@ -330,6 +337,7 @@ fn build_page(
     mut rows: Vec<Cell>,
     limit: u32,
     include_data: bool,
+    network: Network,
 ) -> async_graphql::Result<(Vec<GraphCell>, Option<String>)> {
     let has_more = rows.len() > limit as usize;
     if has_more {
@@ -348,17 +356,37 @@ fn build_page(
     };
     let data = rows
         .into_iter()
-        .map(|row| render_cell(row, include_data))
+        .map(|row| render_cell(row, include_data, network))
         .collect::<async_graphql::Result<Vec<_>>>()?;
     Ok((data, next_cursor))
 }
 
-fn render_cell(row: Cell, include_data: bool) -> async_graphql::Result<GraphCell> {
+fn render_cell(
+    row: Cell,
+    include_data: bool,
+    network: Network,
+) -> async_graphql::Result<GraphCell> {
+    let lock_kind = script_registry::lookup(
+        network,
+        &row.lock_code_hash,
+        row.lock_hash_type,
+        ScriptSlot::Lock,
+    )
+    .map(str::to_owned);
+
     let lock = Script {
         code_hash: hex_prefixed(&row.lock_code_hash),
         hash_type: hash_type_label(row.lock_hash_type)?.to_owned(),
         args: hex_prefixed(&row.lock_args),
     };
+
+    let type_kind = match (row.type_code_hash.as_deref(), row.type_hash_type) {
+        (Some(code_hash), Some(hash_type)) => {
+            script_registry::lookup(network, code_hash, hash_type, ScriptSlot::Type).map(str::to_owned)
+        }
+        _ => None,
+    };
+
     let type_script = match (
         row.type_code_hash.as_deref(),
         row.type_hash_type,
@@ -392,8 +420,10 @@ fn render_cell(row: Cell, include_data: bool) -> async_graphql::Result<GraphCell
         capacity_shannons: row.capacity_shannons,
         lock,
         lock_hash: hex_prefixed(&row.lock_hash),
+        lock_kind,
         type_script,
         type_hash: row.type_hash.as_deref().map(hex_prefixed),
+        type_kind,
         data: include_data.then(|| hex_prefixed(&row.data)),
         is_live: consumed_by.is_none(),
         consumed_by,
