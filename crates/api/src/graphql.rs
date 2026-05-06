@@ -382,7 +382,8 @@ fn render_cell(
 
     let type_kind = match (row.type_code_hash.as_deref(), row.type_hash_type) {
         (Some(code_hash), Some(hash_type)) => {
-            script_registry::lookup(network, code_hash, hash_type, ScriptSlot::Type).map(str::to_owned)
+            script_registry::lookup(network, code_hash, hash_type, ScriptSlot::Type)
+                .map(str::to_owned)
         }
         _ => None,
     };
