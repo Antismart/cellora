@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.vite
+.eslintcache
+.env
+.env.local
+*.log
