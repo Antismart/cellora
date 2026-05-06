@@ -50,6 +50,8 @@ moka = { workspace = true }
 redis = { workspace = true }
 prometheus = { workspace = true }
 async-graphql = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -226,3 +226,37 @@ impl ApiKey {
         self.revoked_at.is_some()
     }
 }
+
+/// Read-side shape of a `users` row. One row per GitHub identity.
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct User {
+    pub id: uuid::Uuid,
+    pub github_user_id: i64,
+    pub github_login: String,
+    pub email: Option<String>,
+    pub avatar_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Read-side shape of a `sessions` row. The `token_hash` column is the
+/// SHA-256 hex digest of the cookie value; the plaintext token is never
+/// stored. Sessions cascade-delete when the owning user is removed.
+#[allow(missing_docs)]
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub token_hash: String,
+    pub user_id: uuid::Uuid,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub user_agent: Option<String>,
+}
+
+impl Session {
+    /// `true` when the session has not yet passed its expiry.
+    pub fn is_active(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at > now
+    }
+}

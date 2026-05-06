@@ -14,7 +14,9 @@ pub mod migrate;
 pub mod models;
 pub mod pool;
 pub mod reorg_log;
+pub mod sessions;
 pub mod transactions;
+pub mod users;
 
 pub use error::{DbError, DbResult};
 pub use pool::connect;

@@ -547,6 +547,7 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",
@@ -557,6 +558,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "utoipa",
+ "uuid",
  "wiremock",
 ]
 
@@ -602,6 +604,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3781,6 +3784,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
  "webpki-roots 0.26.11",
 ]
 
@@ -3863,6 +3867,7 @@ dependencies = [
  "stringprep",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -3903,6 +3908,7 @@ dependencies = [
  "stringprep",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -3929,6 +3935,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4644,6 +4651,7 @@ checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

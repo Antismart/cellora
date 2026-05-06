@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT consumed_by_tx_hash FROM cells WHERE tx_hash = $1 AND output_index = 0",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consumed_by_tx_hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "7675cc496f2dca6c7b5f71e9597bf6f7d2ef8662e10cc274118a7de4ea576226"
+}

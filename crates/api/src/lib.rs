@@ -29,6 +29,7 @@ pub mod pagination;
 pub mod ratelimit;
 pub mod routes;
 pub mod scripts;
+pub mod session;
 pub mod state;
 pub mod tip;
 
@@ -119,10 +120,20 @@ pub fn build_app(state: AppState) -> Router {
         .layer(from_fn_with_state(state.clone(), rate_limit_graphql))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
 
+    // Dashboard surface. Session-cookie authenticated; no rate limiter
+    // attached because the volume per user is bounded by human
+    // interaction and the calls don't hit the indexer hot path. If
+    // abuse becomes a concern we add a per-user limiter independently
+    // of the per-key one.
+    let admin_routes = Router::new()
+        .route("/admin/me", get(routes::admin::me))
+        .layer(from_fn_with_state(state.clone(), session::middleware));
+
     Router::new()
         .merge(public)
         .merge(rest)
         .merge(graphql_router)
+        .merge(admin_routes)
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(from_fn_with_state(state.clone(), record_request_metrics))
         .layer(middleware)

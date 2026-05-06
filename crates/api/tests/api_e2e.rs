@@ -18,12 +18,14 @@ use std::time::{Instant, SystemTime};
 use bigdecimal::BigDecimal;
 use cellora_api::keys as api_keys_helper;
 use cellora_api::ratelimit::RateLimiter;
+use cellora_api::session as api_session;
 use cellora_api::tip::{TipSnapshot, TipTracker};
 use cellora_api::{build_app, AppState};
 use cellora_common::ckb::CkbClient;
 use cellora_common::config::{Config, LogFormat};
 use cellora_db::models::{ApiKeyTier, BlockRow, CellRow, ConsumedCellRef, HashType};
-use cellora_db::{api_keys, blocks, cells, connect, migrate};
+use cellora_db::{api_keys, blocks, cells, connect, migrate, sessions, users};
+use chrono::{Duration as ChronoDuration, Utc};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -1966,4 +1968,147 @@ async fn openapi_endpoint_serves_the_spec() {
     assert!(body["paths"]["/v1/health"].is_object());
     assert!(body["paths"]["/v1/cells"].is_object());
     assert!(body["paths"]["/v1/stats"].is_object());
+}
+
+// -- /admin/me -------------------------------------------------------------
+//
+// Slice 2 of Week 5: dashboard sessions. Bearer-token auth is unrelated —
+// these tests insert a user + session row directly and drive the endpoint
+// through the cookie path. OAuth issuance is wired up in the next slice.
+
+/// Insert a `users` row and an active `sessions` row, returning the
+/// plaintext token the caller should set as the cookie value.
+async fn issue_test_session(pool: &PgPool) -> String {
+    let user = users::upsert_from_github(
+        pool,
+        4_242_424_242,
+        "test-user",
+        Some("test@example.com"),
+        Some("https://example.com/avatar.png"),
+    )
+    .await
+    .expect("upsert user");
+
+    let token = api_session::generate_token();
+    let expires = Utc::now() + ChronoDuration::hours(24);
+    sessions::insert(
+        pool,
+        &token.hash,
+        user.id,
+        expires,
+        Some("integration-test/1.0"),
+    )
+    .await
+    .expect("insert session");
+
+    token.plaintext
+}
+
+fn get_with_cookie(path: &str, cookie_value: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(
+            "cookie",
+            format!("{}={}", api_session::COOKIE_NAME, cookie_value),
+        )
+        .body(Body::empty())
+        .expect("build request")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_me_rejects_request_without_session_cookie() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/admin/me"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_me_rejects_unknown_session_token() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_with_cookie("/admin/me", "definitely-not-a-real-token"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_me_returns_user_for_valid_session() {
+    let harness = up().await;
+    let token = issue_test_session(&harness.pool).await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_with_cookie("/admin/me", &token))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response.into_body()).await;
+    assert_eq!(body["user"]["github_login"], "test-user");
+    assert_eq!(body["user"]["email"], "test@example.com");
+    assert_eq!(
+        body["user"]["avatar_url"],
+        "https://example.com/avatar.png"
+    );
+    // github_user_id is internal — must not appear in the public projection.
+    assert!(body["user"].get("github_user_id").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_me_rejects_expired_session() {
+    let harness = up().await;
+    let user = users::upsert_from_github(
+        &harness.pool,
+        7_777_777_777,
+        "expired-user",
+        None,
+        None,
+    )
+    .await
+    .expect("upsert user");
+
+    let token = api_session::generate_token();
+    let already_expired = Utc::now() - ChronoDuration::hours(1);
+    sessions::insert(&harness.pool, &token.hash, user.id, already_expired, None)
+        .await
+        .expect("insert session");
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_with_cookie("/admin/me", &token.plaintext))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_me_does_not_accept_a_bearer_token() {
+    let harness = up().await;
+
+    // Pre-issued bearer must NOT authenticate the dashboard surface —
+    // /admin/* lives on session cookies only.
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_authed("/admin/me", &harness.bearer))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
