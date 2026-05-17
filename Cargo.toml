@@ -63,7 +63,7 @@ ckb-hash = "0.117"
 # HTTP server (API crate)
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "macros", "query", "matched-path"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "timeout", "request-id", "catch-panic", "util"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "request-id", "catch-panic", "util", "cors"] }
 http = "1"
 http-body-util = "0.1"
 base64 = "0.22"

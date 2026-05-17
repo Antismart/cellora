@@ -104,7 +104,11 @@ inside the block time). Polling is simpler to reason about than streaming
 subscriptions, recovers from transient connection loss without special
 cases, and is sufficient for the latency targets of a data layer. The
 tradeoff is a few seconds of indexing lag, accepted in exchange for
-simpler failure semantics.
+simpler failure semantics. CKB's WebSocket subscription endpoint can
+restart, which would mean dropped frames or stale state until reconnect;
+polling tolerates a connection blip transparently because every cycle
+starts fresh, so the operational case for polling is stronger than the
+"latency budget" framing alone.
 
 **Parsing.** Blocks are parsed using `ckb-jsonrpc-types` directly — scripts,
 outpoints, and capacities pass through with their native types rather than
@@ -256,6 +260,16 @@ The rollback being transactional means no reader ever sees the system in a
 split-brain state where the recorded tip is on the new chain but some of
 the old chain's cells are still present.
 
+**Sizing the rollback path.** CKB community guidance puts the practical
+floor at 6 blocks of comfort and 12+ for operational headroom. Cellora
+plans for a default rollback target of 12 blocks, with the upper plumbing
+bound set materially higher (around 100) so that a deeper-than-expected
+reorg is logged loudly and still rolled back correctly rather than
+crashing the indexer. Every reorg writes one row to a `reorg_log` audit
+table recording detection time, divergence height, depth, and the
+recovery completion time — both for incident review and as the source for
+the Prometheus `reorg_*` metrics.
+
 ## Consistency and correctness
 
 - **Single-writer model** eliminates write-side concurrency. No scenario
@@ -268,6 +282,41 @@ the old chain's cells are still present.
   `indexer_state` to the common ancestor happen together.
 - **Every record is reconstructable** from the node, so the recovery story
   for any corruption is "reindex."
+
+## Trust model
+
+A query service that sits between signers and consensus is a trust
+surface whether the operator names it or not. Cellora is, today, a
+trusted oracle: clients ask, we answer, they sign. That is the same
+posture every production indexer in the CKB ecosystem currently sits
+in, but writing it down is a precondition for moving past it.
+
+The migration toward verifiable responses runs in three steps, in order
+of ambition:
+
+1. **Annotate every record with the authoritative block.** Every cell
+   response carries `block_hash` alongside `block_number` (shipped in
+   Week 2). Clients can cross-check against their own node, or against
+   a second provider, with no extra round-trip. Transactions, when
+   exposed, will carry the same.
+2. **Expose proofs as a first-class response.** A `/v1/proofs/:tx_hash`
+   endpoint passes through the CKB node's `get_transaction_proof`
+   alongside the relevant block header. Clients verify the
+   tx-to-header Merkle path themselves; the trust surface drops to "did
+   you hand me the right header?" Planned for Week 4 alongside the
+   other correctness work.
+3. **Full MMR / Flyclient bundles.** With the chain-wide MMR commitment
+   in the block-header extension field, a client holding any recent
+   trusted header can verify arbitrary historical inclusion. This is
+   the version where Cellora is independently verifiable — it is also
+   the one that needs deeper coordination with the CKB protocol team
+   on what nodes serve and how, and is therefore on the post-Week 7
+   horizon rather than calendared.
+
+Throughout this evolution Cellora's commitment is **additive**, not
+replacement. Today's REST shape stays. Each step adds optional fields
+or new endpoints; clients that don't ask for proofs continue to receive
+exactly the responses they receive now.
 
 ## Tech stack
 

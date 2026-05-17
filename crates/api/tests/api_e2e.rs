@@ -320,6 +320,7 @@ fn test_config(database_url: &str) -> Config {
         api_max_page_size: 500,
         api_request_timeout_ms: 10_000,
         api_tip_cache_refresh_ms: 1_000,
+    api_cors_allowed_origins: None,
         api_auth_cache_ttl_seconds: 60,
         api_auth_cache_capacity: 10_000,
         redis_url: "redis://localhost:6379".to_owned(),

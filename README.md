@@ -2,7 +2,7 @@
 
 Production-grade, multi-tenant SaaS indexer for the [Nervos CKB](https://www.nervos.org) blockchain. Cellora exposes indexed on-chain data (blocks, transactions, cells) via REST and GraphQL APIs, so DApp teams can query CKB without running their own indexing infrastructure.
 
-> **Status:** Week 3 of a 7-week build-out. Week 1 shipped block ingestion. Week 2 added the read-only REST API (health, blocks, cells, stats, OpenAPI spec) with cursor-based pagination and a tip cache. Week 3 lands API-key authentication (Argon2id-hashed bearer tokens), per-key Redis token-bucket rate limiting with separate REST and GraphQL surfaces, the GraphQL endpoint at `/graphql`, and an admin CLI for issuing keys. Reorg handling, observability, the dashboard, webhooks, and billing are in later weeks.
+> **Status:** Week 4 of a 7-week build-out. Weeks 1–3 shipped block ingestion, the read-only REST API (health, blocks, cells, stats, OpenAPI spec) with cursor-based pagination and a tip cache, plus API-key auth, Redis token-bucket rate limiting, GraphQL at `/graphql`, and an admin CLI for issuing keys. Week 4 has landed reorg detection + rollback (with the `reorg_log` audit trail), Prometheus metrics for the API and indexer, and readiness probes for Postgres/Redis/CKB. Remaining Week 4 work: OpenTelemetry export, a Grafana dashboard JSON, and `docs/observability.md`. Week 5+ (dashboard, webhooks, billing) are pending.
 
 ## Architecture at a glance
 
@@ -200,8 +200,8 @@ cellora/
 
 1. **Week 1** — workspace, docker-compose, ingestion pipeline.
 2. **Week 2** — REST API + OpenAPI.
-3. **Week 3** — API-key auth, Redis rate limiting, GraphQL ← *current*.
-4. **Week 4** — reorg handling, Prometheus metrics, Grafana, OpenTelemetry.
+3. **Week 3** — API-key auth, Redis rate limiting, GraphQL.
+4. **Week 4** — reorg handling, Prometheus metrics, readiness probes (OpenTelemetry + Grafana + observability docs pending) ← *current*.
 5. **Week 5** — dashboard (React + Vite + Tailwind) with GitHub OAuth.
 6. **Week 6** — webhooks and GraphQL subscriptions.
 7. **Week 7** — Stripe billing, partitioning, Kubernetes deployment.

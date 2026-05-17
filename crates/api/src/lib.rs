@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header::HeaderName, HeaderValue, Request, Response, StatusCode};
+use axum::http::{header, header::HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -46,6 +46,7 @@ use serde_json::json;
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
@@ -69,6 +70,7 @@ const TIP_STALE_HEADER: HeaderName = HeaderName::from_static("x-indexer-tip-stal
 /// attached. Handed to the test harness and to `main.rs` alike.
 pub fn build_app(state: AppState) -> Router {
     let request_timeout = Duration::from_millis(state.config.api_request_timeout_ms);
+    let cors_layer = build_cors_layer(&state.config);
 
     let middleware = ServiceBuilder::new()
         .layer(CatchPanicLayer::custom(handle_panic))
@@ -110,6 +112,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/cells", get(routes::cells::list))
         .route("/v1/stats", get(routes::stats::stats))
         .route("/v1/proofs/:tx_hash", get(routes::proofs::passthrough))
+        .fallback(rest_not_found)
         .layer(from_fn_with_state(state.clone(), rate_limit_rest))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
 
@@ -129,7 +132,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/admin/me", get(routes::admin::me))
         .layer(from_fn_with_state(state.clone(), session::middleware));
 
-    Router::new()
+    let app = Router::new()
         .merge(public)
         .merge(rest)
         .merge(graphql_router)
@@ -137,7 +140,46 @@ pub fn build_app(state: AppState) -> Router {
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(from_fn_with_state(state.clone(), record_request_metrics))
         .layer(middleware)
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(cors) = cors_layer {
+        app.layer(cors)
+    } else {
+        app
+    }
+}
+
+fn build_cors_layer(config: &cellora_common::config::Config) -> Option<CorsLayer> {
+    let raw = config.api_cors_allowed_origins.as_deref()?;
+    let origins: Vec<HeaderValue> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .filter_map(|value| match HeaderValue::from_str(value) {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(origin = value, "invalid CORS origin ignored");
+                None
+            }
+        })
+        .collect();
+
+    if origins.is_empty() {
+        return None;
+    }
+
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::ACCEPT,
+                header::AUTHORIZATION,
+                REQUEST_ID_HEADER.clone(),
+            ])
+            .allow_credentials(true),
+    )
 }
 
 /// Serve the Prometheus text-format snapshot. Public route — operators
@@ -225,6 +267,10 @@ async fn graphql_handler(
 /// describes the handlers that sit next to it.
 async fn openapi_handler() -> impl IntoResponse {
     ([("content-type", "application/json")], openapi::spec_json())
+}
+
+async fn rest_not_found() -> impl IntoResponse {
+    error::ApiError::NotFound("route not found")
 }
 
 /// HTTP header carrying the rate-limit bucket capacity for the current

@@ -106,6 +106,10 @@ pub struct Config {
     /// Refresh interval for the cached `(indexer_tip, node_tip)` snapshot.
     #[serde(default = "default_api_tip_cache_refresh_ms")]
     pub api_tip_cache_refresh_ms: u64,
+    /// Comma-separated list of allowed CORS origins for the API.
+    /// When unset or empty, CORS is disabled (same-origin only).
+    #[serde(default)]
+    pub api_cors_allowed_origins: Option<String>,
 
     /// Time-to-live for entries in the in-process auth verification cache.
     /// Keeps Argon2 verification off the hot path for repeat-presented
