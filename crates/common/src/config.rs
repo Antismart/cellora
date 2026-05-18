@@ -111,6 +111,25 @@ pub struct Config {
     #[serde(default)]
     pub api_cors_allowed_origins: Option<String>,
 
+    /// GitHub OAuth client ID used for dashboard sign-in.
+    #[serde(default)]
+    pub dashboard_oauth_github_client_id: Option<String>,
+    /// GitHub OAuth client secret used for dashboard sign-in.
+    #[serde(default)]
+    pub dashboard_oauth_github_client_secret: Option<String>,
+    /// OAuth callback URL registered with GitHub.
+    #[serde(default)]
+    pub dashboard_oauth_github_redirect_url: Option<String>,
+    /// Frontend URL to redirect to after successful OAuth.
+    #[serde(default)]
+    pub dashboard_redirect_url: Option<String>,
+    /// Session TTL in days for dashboard cookies.
+    #[serde(default = "default_dashboard_session_ttl_days")]
+    pub dashboard_session_ttl_days: i64,
+    /// Whether dashboard cookies must be `Secure`.
+    #[serde(default = "default_dashboard_cookie_secure")]
+    pub dashboard_cookie_secure: bool,
+
     /// Time-to-live for entries in the in-process auth verification cache.
     /// Keeps Argon2 verification off the hot path for repeat-presented
     /// keys; revocation is best-effort within this window.
@@ -213,6 +232,14 @@ fn default_api_request_timeout_ms() -> u64 {
 
 fn default_api_tip_cache_refresh_ms() -> u64 {
     1_000
+}
+
+fn default_dashboard_session_ttl_days() -> i64 {
+    30
+}
+
+fn default_dashboard_cookie_secure() -> bool {
+    true
 }
 
 fn default_api_auth_cache_ttl_seconds() -> u64 {

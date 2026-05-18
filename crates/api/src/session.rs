@@ -134,7 +134,8 @@ async fn resolve(state: &AppState, hash: &str) -> Result<AuthenticatedSession, A
 /// Pull the `cellora_session` cookie value out of the headers. Returns
 /// `None` for no Cookie header, a non-ASCII header, or no cookie of the
 /// right name. Empty cookie values are also `None`.
-fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
+/// Pull the `cellora_session` cookie value out of the headers.
+pub fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     for pair in raw.split(';') {
         let (key, value) = pair.trim().split_once('=')?;

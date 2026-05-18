@@ -206,6 +206,9 @@ async fn build_state(
 
     let tip = TipTracker::new();
     let mut state = AppState::with_tip(pool.clone(), config, tip.clone());
+    if let Some(manager) = redis_manager.clone() {
+        state = state.with_redis(manager);
+    }
     if let Some(l) = limiter {
         state = state.with_rate_limiter(l);
     }
@@ -321,6 +324,14 @@ fn test_config(database_url: &str) -> Config {
         api_request_timeout_ms: 10_000,
         api_tip_cache_refresh_ms: 1_000,
     api_cors_allowed_origins: None,
+        dashboard_oauth_github_client_id: Some("test-client".to_owned()),
+        dashboard_oauth_github_client_secret: Some("test-secret".to_owned()),
+        dashboard_oauth_github_redirect_url: Some(
+            "http://localhost:8080/admin/oauth/github/callback".to_owned(),
+        ),
+        dashboard_redirect_url: Some("http://localhost:3000/app".to_owned()),
+        dashboard_session_ttl_days: 30,
+        dashboard_cookie_secure: false,
         api_auth_cache_ttl_seconds: 60,
         api_auth_cache_capacity: 10_000,
         redis_url: "redis://localhost:6379".to_owned(),
@@ -401,10 +412,9 @@ async fn readiness_returns_ok_when_db_is_healthy() {
     let body = read_json(response.into_body()).await;
     assert_eq!(body["status"], "ready");
     assert_eq!(body["db"], "ok");
-    // The default harness does not attach a Redis manager or a CKB
-    // client to AppState — those probes are reported as "skipped"
-    // and do not fail the response.
-    assert_eq!(body["redis"], "skipped");
+    // The default harness attaches Redis for OAuth state storage; the
+    // CKB client remains unattached in most tests.
+    assert_eq!(body["redis"], "ok");
     assert_eq!(body["ckb_node"]["state"], "skipped");
 }
 
@@ -2067,6 +2077,29 @@ async fn admin_me_returns_user_for_valid_session() {
     );
     // github_user_id is internal — must not appear in the public projection.
     assert!(body["user"].get("github_user_id").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_oauth_start_redirects_to_github() {
+    let harness = up().await;
+
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get("/admin/oauth/github/start"))
+        .await
+        .expect("serve request");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .expect("location header");
+    assert!(location.starts_with("https://github.com/login/oauth/authorize?"));
+    assert!(location.contains("client_id=test-client"));
+    assert!(location.contains("redirect_uri="));
+    assert!(location.contains("state="));
 }
 
 #[tokio::test(flavor = "multi_thread")]

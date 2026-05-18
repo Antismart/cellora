@@ -545,6 +545,7 @@ dependencies = [
  "prometheus",
  "rand 0.8.6",
  "redis",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

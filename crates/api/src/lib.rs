@@ -128,6 +128,11 @@ pub fn build_app(state: AppState) -> Router {
     // interaction and the calls don't hit the indexer hot path. If
     // abuse becomes a concern we add a per-user limiter independently
     // of the per-key one.
+    let admin_public = Router::new()
+        .route("/admin/oauth/github/start", get(routes::admin::github_start))
+        .route("/admin/oauth/github/callback", get(routes::admin::github_callback))
+        .route("/admin/sign-out", axum::routing::post(routes::admin::sign_out));
+
     let admin_routes = Router::new()
         .route("/admin/me", get(routes::admin::me))
         .layer(from_fn_with_state(state.clone(), session::middleware));
@@ -136,6 +141,7 @@ pub fn build_app(state: AppState) -> Router {
         .merge(public)
         .merge(rest)
         .merge(graphql_router)
+    .merge(admin_public)
         .merge(admin_routes)
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(from_fn_with_state(state.clone(), record_request_metrics))

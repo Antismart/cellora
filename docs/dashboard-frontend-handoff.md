@@ -44,6 +44,9 @@ For local dev today: run the Nuxt dev server on `http://localhost:3000` and prox
 | Method | Path        | Returns                  | Notes |
 |--------|-------------|--------------------------|-------|
 | GET    | `/admin/me` | `{ user: UserView }`     | 401 if no session cookie or session expired |
+| GET    | `/admin/oauth/github/start` | 302 redirect | Begins GitHub OAuth flow |
+| GET    | `/admin/oauth/github/callback` | 302 redirect | Exchanges code, mints session cookie, redirects to dashboard |
+| POST   | `/admin/sign-out` | 204 | Clears session cookie (idempotent) |
 
 `UserView`:
 
@@ -62,9 +65,6 @@ These endpoints back the rest of the Nuxt prototype. They're scoped into Week 5 
 
 | Method | Path                              | Purpose | Slice |
 |--------|-----------------------------------|---------|-------|
-| GET    | `/admin/oauth/github/start`       | Redirect to GitHub authorize URL | 3 |
-| GET    | `/admin/oauth/github/callback`    | OAuth code exchange → upserts user, mints session cookie, 302 to `/app` | 3 |
-| POST   | `/admin/sign-out`                 | Invalidates session row, clears cookie | 3 |
 | GET    | `/admin/keys`                     | List the user's API keys | 5 |
 | POST   | `/admin/keys`                     | Create key — returns `full` once | 5 |
 | POST   | `/admin/keys/:id/rotate`          | Rotate (new secret, same row) | 5 |
@@ -112,7 +112,7 @@ The backend issues sessions in the OAuth callback. The cookie:
 | `Secure`   | yes (in prod; relaxed in dev only if you explicitly opt out) |
 | `SameSite` | `Lax`              |
 | `Path`     | `/`                |
-| Max-Age    | (TBD with slice 3 — likely 30 days, rolling) |
+| Max-Age    | 30 days, rolling |
 
 **The frontend never reads, sets, or inspects this cookie.** Treat it as opaque. The only thing the Nuxt app does with auth state is:
 
@@ -262,7 +262,7 @@ Each composable in `cellora-nuxt` maps to a backend endpoint. Use this table to 
 | Composable / mock      | Real fetch                                    | Status |
 |------------------------|-----------------------------------------------|--------|
 | `useAuth().user`       | `GET /admin/me`                                | ✅ shipped |
-| `useAuth().signOut`    | `POST /admin/sign-out`                         | ⏳ slice 3 |
+| `useAuth().signOut`    | `POST /admin/sign-out`                         | ✅ shipped |
 | `useLiveTip()`         | `GET /v1/stats` (via `/admin/status` once it exists, or directly if the dashboard origin can hit the API) | ⏳ slice 9 wraps; `/v1/stats` itself is shipped |
 | `apiKeysSeed`          | `GET /admin/keys`                              | ⏳ slice 5 |
 | `CreateKeyModal.onCreate` | `POST /admin/keys` → reveal `secret` once | ⏳ slice 5 |
@@ -295,7 +295,7 @@ There is no useful component code in the archive. The Nuxt prototype's UI librar
 
 The Nuxt team should push back on any of these if they don't work for the dashboard:
 
-- **CORS** — not currently configured. Either we run same-origin via a reverse proxy in prod (preferred) or the API needs `tower-http::cors` with the dashboard origin allow-listed and `Access-Control-Allow-Credentials: true`. Decide before slice 3 ships.
+- **CORS** — configurable via `CELLORA_API_CORS_ALLOWED_ORIGINS`. When set, the API replies with `Access-Control-Allow-Credentials: true`.
 - **Network in the URL vs. a header** — ADR 0007 leaves this open between `/v1/{network}/...` and `X-Cellora-Network: …`. The dashboard's Explorer page is what'll feel the difference most. Express a preference and we'll lock it.
 - **Session cookie lifetime** — pick a max-age and a rolling-vs-absolute behaviour. Default proposal: 30-day rolling (every authenticated hit bumps `expires_at`).
 - **Email visibility** — `/admin/me` currently surfaces the GitHub-reported email when GitHub returns one. Some users have it private. If the dashboard needs to render avatars more prominently than email, that's fine; if the dashboard depends on email everywhere, we need a UI for "set a contact email" too.
