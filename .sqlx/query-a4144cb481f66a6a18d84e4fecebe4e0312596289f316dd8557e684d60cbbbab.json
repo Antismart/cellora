@@ -1,20 +1,30 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            prefix,\n            secret_hash,\n            tier AS \"tier: ApiKeyTier\",\n            label,\n            created_at,\n            revoked_at,\n            last_used_at\n        FROM api_keys\n        WHERE prefix = $1 AND revoked_at IS NULL\n        ",
+  "query": "\n        SELECT\n            id,\n            user_id,\n            prefix,\n            secret_hash,\n            tier AS \"tier: ApiKeyTier\",\n            label,\n            created_at,\n            revoked_at,\n            last_used_at\n        FROM api_keys\n        ORDER BY created_at DESC\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
         "name": "prefix",
         "type_info": "Text"
       },
       {
-        "ordinal": 1,
+        "ordinal": 3,
         "name": "secret_hash",
         "type_info": "Text"
       },
       {
-        "ordinal": 2,
+        "ordinal": 4,
         "name": "tier: ApiKeyTier",
         "type_info": {
           "Custom": {
@@ -30,32 +40,32 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 5,
         "name": "label",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 6,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "revoked_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "last_used_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
+      false,
+      false,
       false,
       false,
       false,
@@ -65,5 +75,5 @@
       true
     ]
   },
-  "hash": "8220452d57aeefd94e4431ac39c1da623c50f74c762675d434ff38526d6bc84f"
+  "hash": "a4144cb481f66a6a18d84e4fecebe4e0312596289f316dd8557e684d60cbbbab"
 }

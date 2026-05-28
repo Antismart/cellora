@@ -164,9 +164,19 @@ async fn build_state(
     let pool = connect_with_retry(&url, 10).await;
     migrate::run(&pool).await.expect("migrate");
 
+    let harness_user = users::upsert_from_github(
+        &pool,
+        1_000_000_001,
+        "harness-user",
+        Some("harness@example.com"),
+        None,
+    )
+    .await
+    .expect("seed harness user");
     let issued = api_keys_helper::generate().expect("generate");
     api_keys::insert(
         &pool,
+        harness_user.id,
         &issued.prefix,
         &issued.secret_hash,
         ApiKeyTier::Free,
@@ -1499,9 +1509,13 @@ async fn protected_route_rejects_unknown_prefix() {
 #[tokio::test(flavor = "multi_thread")]
 async fn protected_route_rejects_wrong_secret_for_known_prefix() {
     let harness = up().await;
+    let owner = users::upsert_from_github(&harness.pool, 8_888_888_801, "owner-a", None, None)
+        .await
+        .expect("seed user");
     let issued = api_keys_helper::generate().expect("generate");
     api_keys::insert(
         &harness.pool,
+        owner.id,
         &issued.prefix,
         &issued.secret_hash,
         ApiKeyTier::Free,
@@ -1529,9 +1543,13 @@ async fn protected_route_rejects_revoked_key_after_cache_expiry() {
     // path. Issue a separate key, revoke it, and present it before the
     // verification cache has had a chance to populate.
     let harness = up().await;
+    let owner = users::upsert_from_github(&harness.pool, 8_888_888_802, "owner-b", None, None)
+        .await
+        .expect("seed user");
     let issued = api_keys_helper::generate().expect("generate");
     api_keys::insert(
         &harness.pool,
+        owner.id,
         &issued.prefix,
         &issued.secret_hash,
         ApiKeyTier::Free,
@@ -1838,9 +1856,13 @@ async fn rate_limit_buckets_are_per_key() {
 
     // Issue a second key — its bucket should be independent of the
     // harness's pre-issued bearer.
+    let owner = users::upsert_from_github(&harness.pool, 8_888_888_803, "owner-c", None, None)
+        .await
+        .expect("seed user");
     let issued = api_keys_helper::generate().expect("generate");
     api_keys::insert(
         &harness.pool,
+        owner.id,
         &issued.prefix,
         &issued.secret_hash,
         ApiKeyTier::Free,

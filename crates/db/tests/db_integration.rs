@@ -13,7 +13,7 @@ use cellora_db::models::{
     ApiKeyTier, BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, ReorgStatus,
     TransactionRow,
 };
-use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, reorg_log, transactions};
+use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, reorg_log, transactions, users};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
@@ -40,6 +40,14 @@ async fn up() -> Harness {
     let pool = connect_with_retry(&url, 10).await;
     migrate::run(&pool).await.expect("migrate");
     Harness { pool, _pg: pg }
+}
+
+/// Insert a synthetic GitHub-backed user for tests that need to own a key.
+async fn seed_user(pool: &sqlx::PgPool, github_id: i64, login: &str) -> uuid::Uuid {
+    users::upsert_from_github(pool, github_id, login, None, None)
+        .await
+        .expect("seed user")
+        .id
 }
 
 async fn connect_with_retry(url: &str, attempts: u8) -> sqlx::PgPool {
@@ -189,9 +197,11 @@ async fn checkpoint_upsert_is_idempotent() {
 #[tokio::test(flavor = "multi_thread")]
 async fn api_key_insert_and_lookup() {
     let h = up().await;
+    let user_id = seed_user(&h.pool, 100, "alice").await;
 
     let inserted = api_keys::insert(
         &h.pool,
+        user_id,
         "cell_aaaaaaaa",
         "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
         ApiKeyTier::Free,
@@ -200,6 +210,7 @@ async fn api_key_insert_and_lookup() {
     .await
     .expect("insert");
     assert_eq!(inserted.tier, ApiKeyTier::Free);
+    assert_eq!(inserted.user_id, user_id);
     assert_eq!(inserted.label.as_deref(), Some("integration-test"));
     assert!(inserted.revoked_at.is_none());
 
@@ -224,9 +235,11 @@ async fn api_key_lookup_misses_when_unknown_prefix() {
 #[tokio::test(flavor = "multi_thread")]
 async fn api_key_revocation_hides_from_active_lookup() {
     let h = up().await;
+    let user_id = seed_user(&h.pool, 101, "bob").await;
 
     api_keys::insert(
         &h.pool,
+        user_id,
         "cell_bbbbbbbb",
         "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
         ApiKeyTier::Pro,
@@ -260,9 +273,11 @@ async fn api_key_revocation_hides_from_active_lookup() {
 #[tokio::test(flavor = "multi_thread")]
 async fn api_key_list_orders_newest_first() {
     let h = up().await;
+    let user_id = seed_user(&h.pool, 102, "carol").await;
 
     api_keys::insert(
         &h.pool,
+        user_id,
         "cell_11111111",
         "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
         ApiKeyTier::Free,
@@ -275,6 +290,7 @@ async fn api_key_list_orders_newest_first() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     api_keys::insert(
         &h.pool,
+        user_id,
         "cell_22222222",
         "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
         ApiKeyTier::Starter,
@@ -292,9 +308,11 @@ async fn api_key_list_orders_newest_first() {
 #[tokio::test(flavor = "multi_thread")]
 async fn api_key_touch_last_used_updates_timestamp() {
     let h = up().await;
+    let user_id = seed_user(&h.pool, 103, "dan").await;
 
     api_keys::insert(
         &h.pool,
+        user_id,
         "cell_cccccccc",
         "$argon2id$v=19$m=19456,t=2,p=1$placeholder",
         ApiKeyTier::Free,

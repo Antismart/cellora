@@ -12,6 +12,174 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/admin/keys": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /admin/keys` — schema-only stub for the OpenAPI generator.",
+        "description": "The actual handler ([`list_keys`]) takes a session extension that\nutoipa cannot derive parameters for, so we expose a thin wrapper as\nthe OpenAPI surface. The route is still wired to [`list_keys`].",
+        "operationId": "list_keys_doc",
+        "responses": {
+          "200": {
+            "description": "Keys belonging to the signed-in user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListKeysResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /admin/keys` — schema stub.",
+        "operationId": "create_key_doc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Key created; full secret returned once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/keys/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`DELETE /admin/keys/:id` — schema stub.",
+        "operationId": "revoke_key_doc",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Surrogate id of the key to revoke.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Key revoked"
+          },
+          "401": {
+            "description": "Missing or invalid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown id, wrong owner, or already revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/keys/{id}/rotate": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /admin/keys/:id/rotate` — schema stub.",
+        "operationId": "rotate_key_doc",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Surrogate id of the key to rotate.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key rotated; fresh secret returned once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown id, wrong owner, or already revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/blocks/latest": {
       "get": {
         "tags": [
@@ -585,6 +753,48 @@
           }
         }
       },
+      "CreateKeyRequest": {
+        "type": "object",
+        "description": "Request body for `POST /admin/keys`.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable label. Empty strings and whitespace-only\nvalues are coerced to `null`."
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TierInput",
+                "description": "Subscription tier. Defaults to `free` when omitted. Paid tiers\nare accepted on the wire; gating is the dashboard's job."
+              }
+            ]
+          }
+        }
+      },
+      "CreateKeyResponse": {
+        "type": "object",
+        "description": "Response body for `POST /admin/keys` and `POST /admin/keys/:id/rotate`.",
+        "required": [
+          "key",
+          "secret"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/KeyView",
+            "description": "The freshly issued or rotated key row."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The full `cell_<prefix>_<secret>` string. Shown only on this\nresponse — the database stores only the prefix and Argon2id PHC\nhash, so the secret half is unrecoverable after this point."
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "Inner structure of an [`ErrorEnvelope`].",
@@ -634,6 +844,82 @@
           "version": {
             "type": "string",
             "description": "`cellora-api` crate version."
+          }
+        }
+      },
+      "KeyView": {
+        "type": "object",
+        "description": "Public projection of an `api_keys` row. Carries every field the\ndashboard needs to render the key-management table; the `secret_hash`\ncolumn is deliberately omitted because it has no display value and\nsurfacing it would only invite confusion with the plaintext secret.",
+        "required": [
+          "id",
+          "tier",
+          "prefix",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the key was first issued."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable surrogate identifier. Used in `/admin/keys/:id/*` paths.",
+            "example": "00000000-0000-0000-0000-000000000000"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator-supplied label, or `null`."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Most recent time the key was presented on the auth hot path.\nUpdated lazily so the value can lag wall-clock by a small amount."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Public prefix of the key (e.g. `cell_a1b2c3d4`). Safe to log or\ndisplay; uniquely identifies the row for support workflows."
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the key was revoked, or `null` for active keys."
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"active\"` when the key still authenticates, `\"revoked\"` once it\nhas been removed. Derived from the `revoked_at` timestamp.",
+            "example": "active"
+          },
+          "tier": {
+            "type": "string",
+            "description": "Subscription tier — `\"free\"`, `\"starter\"`, or `\"pro\"`.",
+            "example": "free"
+          }
+        }
+      },
+      "ListKeysResponse": {
+        "type": "object",
+        "description": "Response body for `GET /admin/keys`.",
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeyView"
+            },
+            "description": "All keys belonging to the signed-in user, newest first."
           }
         }
       },
@@ -785,6 +1071,15 @@
             "minimum": 0
           }
         }
+      },
+      "TierInput": {
+        "type": "string",
+        "description": "Tier value as supplied in a JSON request body. Lower-cased to match\nthe storage form and the existing CLI flag.",
+        "enum": [
+          "free",
+          "starter",
+          "pro"
+        ]
       }
     }
   },
@@ -808,6 +1103,10 @@
     {
       "name": "proofs",
       "description": "Transaction inclusion proofs forwarded from the CKB node."
+    },
+    {
+      "name": "admin",
+      "description": "Dashboard-only endpoints authenticated by session cookie."
     }
   ]
 }

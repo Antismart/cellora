@@ -13,6 +13,9 @@
 use utoipa::OpenApi;
 
 use crate::error::{ErrorBody, ErrorEnvelope};
+use crate::routes::admin::{
+    CreateKeyRequest, CreateKeyResponse, KeyView, ListKeysResponse, TierInput,
+};
 use crate::routes::blocks::BlockResponse;
 use crate::routes::cells::{CellResponse, CellsPage, ConsumedByResponse, PageMeta, ScriptResponse};
 use crate::routes::health::{CkbNodeStatus, HealthResponse, ReadyResponse};
@@ -35,6 +38,10 @@ use crate::routes::stats::StatsResponse;
         crate::routes::cells::list,
         crate::routes::stats::stats,
         crate::routes::proofs::passthrough,
+        crate::routes::admin::list_keys_doc,
+        crate::routes::admin::create_key_doc,
+        crate::routes::admin::rotate_key_doc,
+        crate::routes::admin::revoke_key_doc,
     ),
     components(schemas(
         HealthResponse,
@@ -50,6 +57,11 @@ use crate::routes::stats::StatsResponse;
         ProofResponse,
         ErrorEnvelope,
         ErrorBody,
+        KeyView,
+        ListKeysResponse,
+        CreateKeyRequest,
+        CreateKeyResponse,
+        TierInput,
     )),
     tags(
         (name = "health", description = "Liveness and readiness probes."),
@@ -57,6 +69,7 @@ use crate::routes::stats::StatsResponse;
         (name = "cells", description = "Paginated cell queries by lock or type hash."),
         (name = "stats", description = "Indexer progress and lag."),
         (name = "proofs", description = "Transaction inclusion proofs forwarded from the CKB node."),
+        (name = "admin", description = "Dashboard-only endpoints authenticated by session cookie."),
     ),
 )]
 pub struct ApiDoc;

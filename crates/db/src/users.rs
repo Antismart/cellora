@@ -74,3 +74,29 @@ pub async fn find_by_id(pool: &PgPool, id: Uuid) -> DbResult<Option<User>> {
     .await?;
     Ok(row)
 }
+
+/// Look up a user by their current GitHub login. Used by the operator
+/// CLI to resolve `--github-login` into the user id required to issue a
+/// key. The login is mutable upstream, so this is only safe as a
+/// human-driven lookup — programmatic callers should hold the user id.
+pub async fn find_by_github_login(pool: &PgPool, login: &str) -> DbResult<Option<User>> {
+    let row = sqlx::query_as!(
+        User,
+        r#"
+        SELECT
+            id,
+            github_user_id,
+            github_login,
+            email,
+            avatar_url,
+            created_at,
+            updated_at
+        FROM users
+        WHERE github_login = $1
+        "#,
+        login,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}

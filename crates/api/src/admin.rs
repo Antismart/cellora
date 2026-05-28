@@ -3,7 +3,7 @@
 //! Invoked via the `cellora-api` binary with the `admin` subcommand:
 //!
 //! ```bash
-//! cargo run -p cellora-api -- admin create-key --tier free --label "alice's testnet"
+//! cargo run -p cellora-api -- admin create-key --github-login alice --tier free --label "alice's testnet"
 //! cargo run -p cellora-api -- admin list-keys
 //! cargo run -p cellora-api -- admin revoke-key cell_a1b2c3d4
 //! ```
@@ -12,14 +12,20 @@
 //! the prefix and the Argon2 hash; the operator must record the key at
 //! creation time. `list-keys` prints prefixes only — the secret is
 //! unrecoverable by design.
+//!
+//! Every key belongs to a dashboard user, so the operator must supply
+//! `--github-login` identifying an already-signed-in user. Sign that
+//! user in once via the dashboard OAuth flow before issuing CLI keys
+//! on their behalf.
 
 // `println!` is the right tool for a CLI; the workspace-wide ban is for
 // service code paths.
 #![allow(clippy::print_stdout, clippy::print_literal)]
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use cellora_db::api_keys;
 use cellora_db::models::ApiKeyTier;
+use cellora_db::users;
 use clap::{Parser, Subcommand, ValueEnum};
 use sqlx::PgPool;
 
@@ -53,6 +59,11 @@ pub enum Command {
 pub enum AdminAction {
     /// Issue a new API key.
     CreateKey {
+        /// GitHub login of the user the key belongs to. The user must
+        /// have signed in via the dashboard at least once so the row
+        /// exists in `users`.
+        #[arg(long)]
+        github_login: String,
         /// Subscription tier the key is associated with.
         #[arg(long)]
         tier: TierArg,
@@ -104,10 +115,19 @@ impl From<TierArg> for ApiKeyTier {
 /// no-op completion.
 pub async fn run(pool: &PgPool, action: AdminAction) -> Result<()> {
     match action {
-        AdminAction::CreateKey { tier, label, json } => {
+        AdminAction::CreateKey { github_login, tier, label, json } => {
+            let user = users::find_by_github_login(pool, &github_login)
+                .await
+                .context("lookup user")?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "no user with github login '{github_login}' — sign in via the dashboard first"
+                    )
+                })?;
             let issued = keys::generate().context("generate api key")?;
             let row = api_keys::insert(
                 pool,
+                user.id,
                 &issued.prefix,
                 &issued.secret_hash,
                 tier.into(),

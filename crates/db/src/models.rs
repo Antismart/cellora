@@ -208,9 +208,16 @@ pub struct ReorgLogEntry {
 /// Read-side shape of an `api_keys` row. Created at issuance, hashed
 /// secret only — the plaintext secret is shown to the operator once at
 /// creation and never persisted.
+///
+/// `id` is the stable surrogate identifier. It is preserved across
+/// rotation, which generates a fresh prefix and secret_hash on the same
+/// logical key. `prefix` is the lookup column used on the auth hot path
+/// and is unique across active and revoked rows.
 #[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct ApiKey {
+    pub id: uuid::Uuid,
+    pub user_id: uuid::Uuid,
     pub prefix: String,
     pub secret_hash: String,
     pub tier: ApiKeyTier,

@@ -130,11 +130,23 @@ pub fn build_app(state: AppState) -> Router {
     // of the per-key one.
     let admin_public = Router::new()
         .route("/admin/oauth/github/start", get(routes::admin::github_start))
-        .route("/admin/oauth/github/callback", get(routes::admin::github_callback))
-        .route("/admin/sign-out", axum::routing::post(routes::admin::sign_out));
+        .route("/admin/oauth/github/callback", get(routes::admin::github_callback));
 
     let admin_routes = Router::new()
         .route("/admin/me", get(routes::admin::me))
+        .route("/admin/sign-out", axum::routing::post(routes::admin::sign_out))
+        .route(
+            "/admin/keys",
+            get(routes::admin::list_keys).post(routes::admin::create_key),
+        )
+        .route(
+            "/admin/keys/:id/rotate",
+            axum::routing::post(routes::admin::rotate_key),
+        )
+        .route(
+            "/admin/keys/:id",
+            axum::routing::delete(routes::admin::revoke_key),
+        )
         .layer(from_fn_with_state(state.clone(), session::middleware));
 
     let app = Router::new()
