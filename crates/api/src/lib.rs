@@ -97,7 +97,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/health", get(routes::health::liveness))
         .route("/v1/health/ready", get(routes::health::readiness))
         .route("/v1/openapi.json", get(openapi_handler))
-        .route("/metrics", get(metrics_handler));
+        .route("/metrics", get(metrics_handler))
+        .route("/v1/stats", get(routes::stats::stats));
 
     // The auth and rate-limit layers sit only on these sub-routers.
     // Public routes live in a separate `Router` that never composes with
@@ -114,7 +115,6 @@ pub fn build_app(state: AppState) -> Router {
         .route("/v1/blocks/latest", get(routes::blocks::latest))
         .route("/v1/blocks/:number", get(routes::blocks::by_number))
         .route("/v1/cells", get(routes::cells::list))
-        .route("/v1/stats", get(routes::stats::stats))
         .route("/v1/proofs/:tx_hash", get(routes::proofs::passthrough))
         .fallback(rest_not_found)
         .layer(from_fn_with_state(state.clone(), rate_limit_rest))
@@ -154,8 +154,13 @@ pub fn build_app(state: AppState) -> Router {
         .route("/admin/webhooks", get(routes::webhooks::list_webhooks).post(routes::webhooks::create_webhook))
         .route("/admin/webhooks/:id", axum::routing::delete(routes::webhooks::delete_webhook))
         .route("/admin/metrics/usage", get(routes::admin_metrics::usage))
-        .route("/admin/metrics/activity", get(routes::admin_metrics::activity))
-        .route("/admin/metrics/status", get(routes::admin_metrics::status))
+        .route("/admin/metrics/summary", get(routes::admin_metrics::summary))
+        .route("/admin/metrics/endpoints", get(routes::admin_metrics::endpoints))
+        .route("/admin/metrics/rate-limits", get(routes::admin_metrics::rate_limits))
+        .route(
+            "/admin/metrics/activity",
+            get(routes::admin_metrics::activity),
+        ).route("/admin/metrics/status", get(routes::admin_metrics::status))
         .layer(from_fn_with_state(state.clone(), session::middleware));
 
     let app = Router::new()
