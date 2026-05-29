@@ -38,6 +38,8 @@ use crate::state::AppState;
 /// know which tier should drive rate-limit decisions.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedKey {
+    /// Surrogate ID of the key, used to link metrics to the user.
+    pub id: uuid::Uuid,
     /// Public prefix of the key (e.g. `cell_a1b2c3d4`). Safe to log.
     pub prefix: String,
     /// Tier the key belongs to.
@@ -93,7 +95,9 @@ pub async fn middleware(
     match resolve(&state, bearer).await {
         Ok(key) => {
             request.extensions_mut().insert((*key).clone());
-            next.run(request).await
+            let mut response = next.run(request).await;
+            response.extensions_mut().insert((*key).clone());
+            response
         }
         Err(err) => err.into_response(),
     }
@@ -119,6 +123,7 @@ async fn resolve(state: &AppState, bearer: String) -> Result<Arc<AuthenticatedKe
         .map_err(|_| ApiError::Unauthorized("secret mismatch"))?;
 
     let resolved = AuthenticatedKey {
+        id: row.id,
         prefix: row.prefix.clone(),
         tier: row.tier,
     };

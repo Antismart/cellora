@@ -5,6 +5,7 @@
 //! repository layer and in helpers on this crate.
 
 pub mod admin;
+pub mod admin_metrics;
 pub mod blocks;
 pub mod cells;
 pub mod health;

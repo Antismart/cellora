@@ -24,6 +24,8 @@ pub mod graphql;
 pub mod hex;
 pub mod keys;
 pub mod metrics;
+/// Background worker for flushing metrics from Redis to Postgres.
+pub mod metrics_worker;
 pub mod openapi;
 pub mod pagination;
 pub mod ratelimit;
@@ -147,6 +149,9 @@ pub fn build_app(state: AppState) -> Router {
             "/admin/keys/:id",
             axum::routing::delete(routes::admin::revoke_key),
         )
+        .route("/admin/metrics/usage", get(routes::admin_metrics::usage))
+        .route("/admin/metrics/activity", get(routes::admin_metrics::activity))
+        .route("/admin/metrics/status", get(routes::admin_metrics::status))
         .layer(from_fn_with_state(state.clone(), session::middleware));
 
     let app = Router::new()
@@ -242,6 +247,36 @@ async fn record_request_metrics(
     state
         .metrics
         .observe_request(&method, &matched_path, status, elapsed);
+
+    if let Some(key) = response.extensions().get::<crate::auth::AuthenticatedKey>() {
+        #[derive(serde::Serialize)]
+        struct ApiRequestLogPayload {
+            api_key_id: uuid::Uuid,
+            method: String,
+            path: String,
+            status_code: u16,
+            latency_ms: u32,
+        }
+
+        let payload = serde_json::to_string(&ApiRequestLogPayload {
+            api_key_id: key.id,
+            method: method.clone(),
+            path: matched_path.clone(),
+            status_code: status,
+            latency_ms: (elapsed * 1000.0) as u32,
+        }).unwrap_or_default();
+
+        if let Some(mut redis) = state.redis.clone() {
+            tokio::spawn(async move {
+                let _: Result<(), _> = redis::cmd("LPUSH")
+                    .arg("api_request_logs")
+                    .arg(payload)
+                    .query_async(&mut redis)
+                    .await;
+            });
+        }
+    }
+
     response
 }
 

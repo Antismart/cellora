@@ -94,9 +94,15 @@ async fn main() -> anyhow::Result<()> {
     let ckb_for_state =
         CkbClient::new(config.ckb_rpc_url.clone()).context("construct ckb client (state)")?;
 
-    let mut state = AppState::with_tip(pool, config, tip).with_ckb(ckb_for_state);
+    let mut state = AppState::with_tip(pool.clone(), config.clone(), tip).with_ckb(ckb_for_state);
+    let mut metrics_worker_handle = None;
     if let Some(manager) = redis_manager {
-        state = state.with_redis(manager);
+        state = state.with_redis(manager.clone());
+        metrics_worker_handle = Some(cellora_api::metrics_worker::spawn(
+            pool.clone(),
+            manager,
+            cancel.clone(),
+        ));
     }
     if let Some(limiter) = rate_limiter {
         state = state.with_rate_limiter(limiter);
@@ -118,6 +124,11 @@ async fn main() -> anyhow::Result<()> {
     cancel.cancel();
     if let Err(err) = refresh_handle.await {
         tracing::warn!(error = %err, "tip refresh task join failure");
+    }
+    if let Some(worker) = metrics_worker_handle {
+        if let Err(err) = worker.await {
+            tracing::warn!(error = %err, "metrics worker join failure");
+        }
     }
 
     serve_result?;
