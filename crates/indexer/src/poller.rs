@@ -160,6 +160,10 @@ impl Poller {
         checkpoint::upsert(&mut tx, parsed.block.number, &parsed.block.hash).await?;
         tx.commit().await.map_err(DbError::from)?;
 
+        if let Some(redis) = self.redis.as_ref() {
+            crate::events::publish_block_and_cells(redis, &parsed.block, &parsed.cells).await;
+        }
+
         let elapsed = start.elapsed();
         self.metrics
             .observe_block_indexed(parsed.block.number, elapsed.as_secs_f64());
