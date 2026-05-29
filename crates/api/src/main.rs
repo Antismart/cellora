@@ -104,6 +104,21 @@ async fn main() -> anyhow::Result<()> {
             cancel.clone(),
         ));
     }
+    
+    let mut event_worker_handle = None;
+    if let Ok(client) = redis::Client::open(config.redis_url.as_str()) {
+        event_worker_handle = Some(tokio::spawn(cellora_api::events::run_event_listener(
+            client,
+            state.event_tx.clone(),
+            cancel.clone(),
+        )));
+    }
+
+    let webhook_worker_handle = tokio::spawn(cellora_api::webhooks::run_webhook_dispatcher(
+        pool.clone(),
+        state.event_tx.subscribe(),
+    ));
+
     if let Some(limiter) = rate_limiter {
         state = state.with_rate_limiter(limiter);
     }
@@ -129,6 +144,14 @@ async fn main() -> anyhow::Result<()> {
         if let Err(err) = worker.await {
             tracing::warn!(error = %err, "metrics worker join failure");
         }
+    }
+    if let Some(worker) = event_worker_handle {
+        if let Err(err) = worker.await {
+            tracing::warn!(error = %err, "event worker join failure");
+        }
+    }
+    if let Err(err) = webhook_worker_handle.await {
+        tracing::warn!(error = %err, "webhook worker join failure");
     }
 
     serve_result?;

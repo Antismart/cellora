@@ -6,6 +6,7 @@
 
 pub mod admin;
 pub mod admin_metrics;
+pub mod webhooks;
 pub mod blocks;
 pub mod cells;
 pub mod health;

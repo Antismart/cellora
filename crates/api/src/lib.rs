@@ -20,6 +20,7 @@
 pub mod admin;
 pub mod auth;
 pub mod error;
+pub mod events;
 pub mod graphql;
 pub mod hex;
 pub mod keys;
@@ -34,6 +35,7 @@ pub mod scripts;
 pub mod session;
 pub mod state;
 pub mod tip;
+pub mod webhooks;
 
 use std::time::Duration;
 
@@ -120,7 +122,7 @@ pub fn build_app(state: AppState) -> Router {
 
     let graphql_schema = graphql::build_schema(state.clone());
     let graphql_router = Router::new()
-        .route("/graphql", axum::routing::post(graphql_handler))
+        .route("/graphql", axum::routing::post(graphql_handler).get(graphql_subscription_handler))
         .layer(axum::Extension(graphql_schema))
         .layer(from_fn_with_state(state.clone(), rate_limit_graphql))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
@@ -146,9 +148,11 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::post(routes::admin::rotate_key),
         )
         .route(
-            "/admin/keys/:id",
-            axum::routing::delete(routes::admin::revoke_key),
+            "/admin/keys/:id/revoke",
+            axum::routing::post(routes::admin::revoke_key),
         )
+        .route("/admin/webhooks", get(routes::webhooks::list_webhooks).post(routes::webhooks::create_webhook))
+        .route("/admin/webhooks/:id", axum::routing::delete(routes::webhooks::delete_webhook))
         .route("/admin/metrics/usage", get(routes::admin_metrics::usage))
         .route("/admin/metrics/activity", get(routes::admin_metrics::activity))
         .route("/admin/metrics/status", get(routes::admin_metrics::status))
@@ -310,9 +314,21 @@ async fn graphql_handler(
     let payload = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
     Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", "application/json")
+        .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(payload))
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response())
+        .unwrap()
+}
+
+async fn graphql_subscription_handler(
+    schema: axum::Extension<graphql::ApiSchema>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    use tower::Service;
+    let mut service = async_graphql_axum::GraphQLSubscription::new(schema.0.clone());
+    match service.call(req).await {
+        Ok(res) => res,
+        Err(e) => match e {},
+    }
 }
 
 /// Serve the OpenAPI specification. Kept outside the normal `routes`
