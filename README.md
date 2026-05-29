@@ -1,219 +1,135 @@
 # Cellora
 
-Production-grade, multi-tenant SaaS indexer for the [Nervos CKB](https://www.nervos.org) blockchain. Cellora exposes indexed on-chain data (blocks, transactions, cells) via REST and GraphQL APIs, so DApp teams can query CKB without running their own indexing infrastructure.
+A high-performance, production-grade, multi-tenant SaaS indexer for the [Nervos CKB](https://www.nervos.org) blockchain. Cellora exposes indexed on-chain data—including blocks, transactions, and cells—via REST and GraphQL APIs, empowering DApp teams to query the CKB network efficiently without maintaining their own indexing infrastructure.
 
-> **Status:** Week 4 of a 7-week build-out. Weeks 1–3 shipped block ingestion, the read-only REST API (health, blocks, cells, stats, OpenAPI spec) with cursor-based pagination and a tip cache, plus API-key auth, Redis token-bucket rate limiting, GraphQL at `/graphql`, and an admin CLI for issuing keys. Week 4 has landed reorg detection + rollback (with the `reorg_log` audit trail), Prometheus metrics for the API and indexer, and readiness probes for Postgres/Redis/CKB. Remaining Week 4 work: OpenTelemetry export, a Grafana dashboard JSON, and `docs/observability.md`. Week 5+ (dashboard, webhooks, billing) are pending.
+## Architecture
 
-## Architecture at a glance
+Cellora is engineered for maximum throughput and reliability, leveraging a Rust-based asynchronous poller, a robust PostgreSQL relational store, and secure API delivery.
 
+```mermaid
+graph LR
+    CKB[CKB Node] -->|Poll| Indexer[Indexer Service]
+    Indexer -->|Tx Commit| PG[(PostgreSQL)]
+    API[API Service] -->|Read| PG
+    Client((HTTP Client)) -->|REST / GraphQL| API
+    
+    subgraph Cellora Core Backend
+        Indexer
+        PG
+        API
+    end
 ```
-┌───────────┐   poll    ┌───────────────┐   tx commit   ┌────────────┐   read   ┌────────┐
-│  CKB node │ ───────── │  indexer svc  │ ────────────▶ │ PostgreSQL │ ◀─────── │ api    │ ◀── HTTP
-└───────────┘           └───────────────┘               └────────────┘          │ svc    │
-                              │                                                 └────────┘
-                              └── graceful shutdown on SIGINT / SIGTERM
-```
 
-- **`crates/common`** — configuration, structured logging, CKB JSON-RPC client.
-- **`crates/db`** — SQLx-backed repositories for blocks, transactions, cells, and the indexer checkpoint.
-- **`crates/indexer`** — the service binary that runs the poll loop and writes to Postgres.
-- **`crates/api`** — the REST service binary. Reads from the same Postgres and serves clients over HTTP.
+### Core Components
 
-See [`docs/architecture.md`](./docs/architecture.md) for the Week 1 walkthrough and [`docs/architecture-overview.md`](./docs/architecture-overview.md) for the end-state design.
+- **`crates/common`**: Handles cross-cutting concerns including shared configuration, structured logging, and the CKB JSON-RPC client.
+- **`crates/db`**: Provides SQLx-backed repositories for persisting blocks, transactions, cells, and safely managing indexer checkpoints.
+- **`crates/indexer`**: The high-performance service binary that operates the polling loop, handles chain reorganizations, and reliably writes state to Postgres.
+- **`crates/api`**: The REST and GraphQL service binary. It serves indexed data to clients over HTTP, featuring intelligent rate limiting and token-bucket traffic control.
 
-## Requirements
+For deep technical insights, review the [Architecture Overview](./docs/architecture-overview.md).
 
-- Rust **stable** (pinned via `rust-toolchain.toml`).
-- Docker + Docker Compose (v2).
-- `sqlx-cli` — installed automatically by `scripts/dev-up.sh` if missing.
+## Prerequisites
+
+- Rust **stable** (pinned via `rust-toolchain.toml`)
+- Docker & Docker Compose (v2)
+- `sqlx-cli` (automatically installed via development scripts)
 
 ## Quickstart
 
-```bash
-# 1. configure
-cp .env.example .env
+Start the local stack and indexer in just a few steps.
 
-# 2. start the stack (Postgres, Redis, CKB dev node, CKB miner)
-#    Redis is reserved for week 3 — it is not used by the Week 1 indexer.
-scripts/dev-up.sh
+1. **Configure your environment**
+   ```bash
+   cp .env.example .env
+   ```
 
-# 3. run the indexer
-cargo run -p cellora-indexer
+2. **Boot infrastructure dependencies**
+   Start PostgreSQL, Redis, and the CKB dev node:
+   ```bash
+   scripts/dev-up.sh
+   ```
 
-# 4. in a second terminal, run the API
-cargo run -p cellora-api
-```
+3. **Start the Indexer Service**
+   Run the block poller to begin ingesting the chain:
+   ```bash
+   cargo run -p cellora-indexer
+   ```
 
-The indexer emits structured logs as it pulls blocks from the dev node:
+4. **Start the API Server**
+   In a new terminal window, start serving traffic:
+   ```bash
+   cargo run -p cellora-api
+   ```
 
-```
-INFO cellora_indexer::poller: indexed block block=0 hash=… txs=2 cells=11 consumed=1 elapsed_ms=53
-INFO cellora_indexer::poller: indexed block block=1 hash=… txs=1 cells=0 consumed=0 elapsed_ms=2
-```
+### Authenticating with the API
 
-The API binds by default to `0.0.0.0:8080`. Health and the OpenAPI spec are public; everything else needs a Bearer token. Issue one via the admin CLI:
+The API binds to `0.0.0.0:8080`. While endpoints like `/v1/health` and the OpenAPI schema are public, data queries require a Bearer token.
+
+Generate a secure API key using the integrated admin CLI:
 
 ```bash
 cargo run -p cellora-api -- admin create-key --tier free --label "local-dev"
-# Record the printed `full` value — it is shown only once.
-export CELLORA_API_KEY=cell_...
+export CELLORA_API_KEY="your-generated-key-here"
 ```
 
-Then:
+## Making Requests
 
+You can query the blockchain using standard REST or flexible GraphQL.
+
+**Authenticated REST:**
 ```bash
-# Public — no auth needed.
-curl -s http://localhost:8080/v1/health        | jq
-curl -s http://localhost:8080/v1/health/ready  | jq
-
-# Authenticated REST.
+# Get the latest indexed block
 curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
   http://localhost:8080/v1/blocks/latest | jq
-curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
-  http://localhost:8080/v1/blocks/0 | jq
+
+# Search for cells by lock_hash
 curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
   "http://localhost:8080/v1/cells?lock_hash=0x$(printf 'aa%.0s' {1..32})" | jq
-curl -s -H "authorization: Bearer $CELLORA_API_KEY" \
-  http://localhost:8080/v1/stats | jq
+```
 
-# Authenticated GraphQL.
+**Authenticated GraphQL:**
+```bash
 curl -s -X POST http://localhost:8080/graphql \
   -H "authorization: Bearer $CELLORA_API_KEY" \
   -H "content-type: application/json" \
   -d '{"query":"{ blocksLatest { number hash } stats { lagBlocks } }"}' | jq
 ```
 
-See [`docs/api.md`](./docs/api.md) for every REST endpoint, the full GraphQL schema, auth and rate-limit semantics, and curl examples. The OpenAPI specification lives at [`docs/openapi.json`](./docs/openapi.json) and is also served at `/v1/openapi.json`.
+Full API specs can be found in our [API Documentation](./docs/api.md) or the locally hosted OpenAPI specification at `/v1/openapi.json`.
 
-`Ctrl-C` triggers graceful shutdown on either binary. The indexer finishes any in-flight block, advances the checkpoint, and exits zero; the API drains in-flight requests before closing the listener.
+## Configuration & Tuning
 
-### Verifying what landed
+Cellora uses standard `12-factor` environment variable configuration. 
 
-```bash
-docker exec -i cellora-postgres psql -U cellora -d cellora -c \
-    "SELECT (SELECT count(*) FROM blocks)       AS blocks,
-            (SELECT count(*) FROM transactions) AS txs,
-            (SELECT count(*) FROM cells)        AS cells,
-            (SELECT last_indexed_block FROM indexer_state) AS checkpoint;"
-```
+Key tunable parameters include:
+- `CELLORA_POLL_INTERVAL_MS`: Tuning for node block polling speed.
+- `CELLORA_API_MAX_PAGE_SIZE`: Hard limits for API clients.
+- `CELLORA_API_RATE_LIMIT_*`: Granular token-bucket rate limits per tier for both REST and GraphQL surfaces.
 
-## Configuration
+See `.env.example` for all configurable environment options.
 
-Every setting is environment-driven (figment loads from `.env` in dev and real env vars in production). See [`.env.example`](./.env.example) for the full list. The important ones:
+## Testing Strategy
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `CELLORA_DATABASE_URL` | `postgres://cellora:cellora@localhost:5432/cellora` | Postgres connection string |
-| `CELLORA_CKB_RPC_URL` | `http://localhost:8114` | CKB JSON-RPC endpoint |
-| `CELLORA_POLL_INTERVAL_MS` | `2000` | Delay between polls when caught up |
-| `CELLORA_INDEXER_START_BLOCK` | `0` | Block to start indexing from on a fresh DB |
-| `CELLORA_LOG_LEVEL` | `info` | `tracing` `EnvFilter` expression |
-| `CELLORA_LOG_FORMAT` | `json` | `json` (prod) or `pretty` (local) |
-| `CELLORA_API_BIND_ADDR` | `0.0.0.0:8080` | Socket the API binary binds to |
-| `CELLORA_API_DEFAULT_PAGE_SIZE` | `50` | Page size applied when a request omits `limit` |
-| `CELLORA_API_MAX_PAGE_SIZE` | `500` | Upper bound on `limit` accepted from clients |
-| `CELLORA_API_REQUEST_TIMEOUT_MS` | `10000` | Per-request timeout enforced by the middleware stack |
-| `CELLORA_API_TIP_CACHE_REFRESH_MS` | `1000` | Refresh interval for the cached `(indexer_tip, node_tip)` snapshot |
-| `CELLORA_API_AUTH_CACHE_TTL_SECONDS` | `60` | TTL of the in-process auth verification cache |
-| `CELLORA_API_AUTH_CACHE_CAPACITY` | `10000` | Max entries in the auth verification cache |
-| `CELLORA_REDIS_URL` | `redis://localhost:6379` | Redis used for the per-key rate limiter |
-| `CELLORA_API_RATE_LIMIT_FAIL_OPEN` | `true` | Fail-open on Redis outage; set `false` to fail closed |
-| `CELLORA_API_RATE_LIMIT_FREE_REST_BURST` | `30` | Free-tier REST bucket capacity |
-| `CELLORA_API_RATE_LIMIT_FREE_REST_REFILL_PER_SEC` | `1` | Free-tier REST refill rate |
-| `CELLORA_API_RATE_LIMIT_STARTER_REST_BURST` | `300` | Starter-tier REST bucket capacity |
-| `CELLORA_API_RATE_LIMIT_STARTER_REST_REFILL_PER_SEC` | `20` | Starter-tier REST refill rate |
-| `CELLORA_API_RATE_LIMIT_PRO_REST_BURST` | `3000` | Pro-tier REST bucket capacity |
-| `CELLORA_API_RATE_LIMIT_PRO_REST_REFILL_PER_SEC` | `200` | Pro-tier REST refill rate |
-| `CELLORA_API_RATE_LIMIT_FREE_GRAPHQL_BURST` | `10` | Free-tier GraphQL bucket capacity |
-| `CELLORA_API_RATE_LIMIT_FREE_GRAPHQL_REFILL_PER_SEC` | `0.5` | Free-tier GraphQL refill rate |
-| `CELLORA_API_RATE_LIMIT_STARTER_GRAPHQL_BURST` | `100` | Starter-tier GraphQL bucket capacity |
-| `CELLORA_API_RATE_LIMIT_STARTER_GRAPHQL_REFILL_PER_SEC` | `10` | Starter-tier GraphQL refill rate |
-| `CELLORA_API_RATE_LIMIT_PRO_GRAPHQL_BURST` | `1000` | Pro-tier GraphQL bucket capacity |
-| `CELLORA_API_RATE_LIMIT_PRO_GRAPHQL_REFILL_PER_SEC` | `100` | Pro-tier GraphQL refill rate |
-
-## Running the tests
-
-The test suite has four layers, each runnable on its own:
+Cellora maintains comprehensive test coverage across four primary layers:
 
 ```bash
-# 1. Pure parser unit tests — no containers, fast, CI-safe.
+# 1. Pure unit tests (fast, CI-safe)
 cargo test -p cellora-indexer --test parser_test
 
-# 2. DB integration — spins up Postgres via testcontainers (requires docker).
+# 2. Database integration (requires Docker)
 cargo test -p cellora-db --test db_integration
 
-# 3. Full-stack end-to-end for the indexer — wiremock stands in for the CKB
-#    node while the real poller writes into a testcontainers Postgres.
+# 3. Indexer End-to-End stack (with Wiremock CKB node)
 cargo test -p cellora-indexer --test indexer_stack_test
 
-# 4. API end-to-end — builds the full Axum router against a testcontainers
-#    Postgres + Redis stack and drives it with tower::ServiceExt::oneshot
-#    (no socket). Covers REST, GraphQL, auth, and rate limiting.
+# 4. API End-to-End router tests (REST, GraphQL, Auth, Rate Limits)
 cargo test -p cellora-api
 
-# Or run everything at once:
+# Run the entire test suite:
 cargo test --workspace
 ```
-
-There is also a load test against a running stack — see
-[`tests/load/rate_limit.js`](./tests/load/rate_limit.js) for the k6
-script and how to issue a key for it.
-
-## Development workflow
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo sqlx prepare --workspace   # regenerate .sqlx/ after changing SQL
-```
-
-The committed `.sqlx/` offline cache lets CI build without a live Postgres (`SQLX_OFFLINE=true`). After any change to a `sqlx::query!` call site or a migration, run `cargo sqlx prepare --workspace` and commit the refreshed cache.
-
-## Repository layout
-
-```
-cellora/
-├── Cargo.toml                      # workspace root
-├── rust-toolchain.toml
-├── docker-compose.yml
-├── migrations/                     # SQL migrations (sqlx)
-├── ops/ckb/                        # CKB dev-node boot scripts
-├── scripts/                        # dev-up, test-integration
-├── crates/
-│   ├── common/                     # config, logging, CKB client
-│   ├── db/                         # schema-aware repositories
-│   ├── indexer/                    # block poller binary
-│   └── api/                        # REST API binary
-├── tests/
-│   └── load/                       # k6 load tests against a running stack
-└── docs/
-    ├── architecture.md
-    ├── architecture-overview.md
-    ├── api.md
-    ├── openapi.json
-    └── decisions/
-        └── 0001-crate-boundaries.md
-```
-
-## Roadmap
-
-1. **Week 1** — workspace, docker-compose, ingestion pipeline.
-2. **Week 2** — REST API + OpenAPI.
-3. **Week 3** — API-key auth, Redis rate limiting, GraphQL.
-4. **Week 4** — reorg handling, Prometheus metrics, readiness probes (OpenTelemetry + Grafana + observability docs pending) ← *current*.
-5. **Week 5** — dashboard (React + Vite + Tailwind) with GitHub OAuth.
-6. **Week 6** — webhooks and GraphQL subscriptions.
-7. **Week 7** — Stripe billing, partitioning, Kubernetes deployment.
 
 ## License
 
-Source-available under the [Functional Source License, Version 1.1, with Apache 2.0 future grant](./LICENSE.md) (**FSL-1.1-ALv2**).
-
-In plain language:
-
-- **Read, modify, self-host** — permitted for internal use, non-commercial research, and professional services to third parties.
-- **Compete by offering Cellora-as-a-service** — not permitted while the license is in effect.
-- Each release automatically converts to Apache-2.0 two years after it ships.
-
-See [`LICENSE.md`](./LICENSE.md) for the full terms.
+Cellora is licensed under the [Functional Source License, Version 1.1, with Apache 2.0 future grant](./LICENSE.md) (**FSL-1.1-ALv2**).
