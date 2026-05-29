@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            path,\n            COUNT(*) as \"requests!\",\n            COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0.0) as \"p95_ms!\"\n        FROM api_request_logs\n        WHERE timestamp >= now() - interval '24 hours'\n        AND api_key_id IN (SELECT id FROM api_keys WHERE user_id = $1)\n        GROUP BY path\n        ORDER BY COUNT(*) DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "requests!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "p95_ms!",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "a6795982070ead8cd27aceb0469545962bcdb11f375d4e57b3e04f0e28c93c95"
+}

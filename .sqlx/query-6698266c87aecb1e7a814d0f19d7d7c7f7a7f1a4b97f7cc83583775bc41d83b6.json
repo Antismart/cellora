@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT \n            l.method,\n            l.path,\n            k.prefix as key_prefix,\n            l.status_code as status,\n            l.latency_ms as ms,\n            l.timestamp\n        FROM api_request_logs l\n        JOIN api_keys k ON l.api_key_id = k.id\n        WHERE k.user_id = $1\n        ORDER BY l.timestamp DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "method",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "key_prefix",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "ms",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "timestamp",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6698266c87aecb1e7a814d0f19d7d7c7f7a7f1a4b97f7cc83583775bc41d83b6"
+}

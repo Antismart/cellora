@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            l.path,\n            k.prefix as key_prefix,\n            l.timestamp,\n            (CASE WHEN l.path LIKE '/graphql%' THEN 'GraphQL' ELSE 'REST' END) as \"surface!\"\n        FROM api_request_logs l\n        JOIN api_keys k ON l.api_key_id = k.id\n        WHERE k.user_id = $1\n        AND l.status_code = 429\n        ORDER BY l.timestamp DESC\n        LIMIT 10\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "key_prefix",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "timestamp",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "surface!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "deac6c1a715907da61d077f4376113f7a79f644017734e33315bb5255f7787a1"
+}
