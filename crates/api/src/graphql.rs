@@ -8,7 +8,7 @@
 //! Auth and rate limiting live on the route in [`crate::lib::build_app`];
 //! resolvers run only after they pass.
 
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject};
+use async_graphql::{Context, EmptyMutation, Object, Schema, SimpleObject, Subscription};
 use cellora_common::config::Network;
 use cellora_db::cells::{self as db_cells, CellCursor, LivenessFilter};
 use cellora_db::models::Cell;
@@ -20,11 +20,11 @@ use crate::state::AppState;
 
 /// The full schema. Constructed once in `build_app` and shared across
 /// requests via the axum extractor.
-pub type ApiSchema = Schema<QueryRoot, EmptyMutation, EmptySubscription>;
+pub type ApiSchema = Schema<QueryRoot, EmptyMutation, SubscriptionRoot>;
 
 /// Build the schema with the [`AppState`] available to every resolver.
 pub fn build_schema(state: AppState) -> ApiSchema {
-    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
+    Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(state)
         .finish()
 }
@@ -459,4 +459,101 @@ fn map_db_err(err: cellora_db::DbError) -> async_graphql::Error {
 
 fn api_to_gql(err: ApiError) -> async_graphql::Error {
     async_graphql::Error::new(err.to_string())
+}
+
+/// Top-level subscription type.
+pub struct SubscriptionRoot;
+
+#[Subscription]
+impl SubscriptionRoot {
+    /// Subscribe to new blocks as they are indexed.
+    async fn blocks_latest<'ctx>(
+        &self,
+        ctx: &'ctx Context<'_>,
+    ) -> async_graphql::Result<impl futures_util::Stream<Item = GraphBlockMinedEvent> + 'ctx> {
+        let state = ctx.data::<AppState>()?;
+        let mut rx = state.event_tx.subscribe();
+
+        Ok(async_stream::stream! {
+            while let Ok(event) = rx.recv().await {
+                if let crate::events::ApiEvent::BlockMined(block) = event {
+                    yield block.into();
+                }
+            }
+        })
+    }
+
+    /// Subscribe to cell events matching a specific lock hash.
+    async fn cells<'ctx>(
+        &self,
+        ctx: &'ctx Context<'_>,
+        lock_hash: String,
+    ) -> async_graphql::Result<impl futures_util::Stream<Item = GraphCellCreatedEvent> + 'ctx> {
+        let state = ctx.data::<AppState>()?;
+        let mut rx = state.event_tx.subscribe();
+
+        Ok(async_stream::stream! {
+            while let Ok(event) = rx.recv().await {
+                if let crate::events::ApiEvent::CellCreated(cell) = event {
+                    if cell.lock_hash == lock_hash {
+                        yield cell.into();
+                    }
+                }
+            }
+        })
+    }
+}
+
+#[derive(SimpleObject)]
+pub struct GraphBlockMinedEvent {
+    pub number: i64,
+    pub hash: String,
+    pub parent_hash: String,
+    pub timestamp: u64,
+}
+
+impl From<cellora_common::events::BlockMinedEvent> for GraphBlockMinedEvent {
+    fn from(e: cellora_common::events::BlockMinedEvent) -> Self {
+        Self {
+            number: e.number,
+            hash: e.hash,
+            parent_hash: e.parent_hash,
+            timestamp: e.timestamp,
+        }
+    }
+}
+
+#[derive(SimpleObject)]
+pub struct GraphCellCreatedEvent {
+    pub tx_hash: String,
+    pub output_index: i32,
+    pub block_number: i64,
+    pub lock_code_hash: String,
+    pub lock_hash_type: i16,
+    pub lock_args: String,
+    pub lock_hash: String,
+    pub type_code_hash: Option<String>,
+    pub type_hash_type: Option<i16>,
+    pub type_args: Option<String>,
+    pub type_hash: Option<String>,
+    pub capacity_shannons: i64,
+}
+
+impl From<cellora_common::events::CellCreatedEvent> for GraphCellCreatedEvent {
+    fn from(e: cellora_common::events::CellCreatedEvent) -> Self {
+        Self {
+            tx_hash: e.tx_hash,
+            output_index: e.output_index,
+            block_number: e.block_number,
+            lock_code_hash: e.lock_code_hash,
+            lock_hash_type: e.lock_hash_type,
+            lock_args: e.lock_args,
+            lock_hash: e.lock_hash,
+            type_code_hash: e.type_code_hash,
+            type_hash_type: e.type_hash_type,
+            type_args: e.type_args,
+            type_hash: e.type_hash,
+            capacity_shannons: e.capacity_shannons,
+        }
+    }
 }

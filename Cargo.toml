@@ -101,13 +101,11 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
 bigdecimal = { version = "0.4", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
-async-trait = "0.1"
 
 # Test-only
 testcontainers = "0.20"
 testcontainers-modules = { version = "0.8", features = ["postgres", "redis"] }
 wiremock = "0.6"
-tempfile = "3"
 
 [profile.release]
 lto = "thin"

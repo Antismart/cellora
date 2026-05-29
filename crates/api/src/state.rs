@@ -44,6 +44,8 @@ pub struct AppState {
     /// the upstream node is reachable and not in initial block
     /// download. `None` skips the probe.
     pub ckb: Option<CkbClient>,
+    /// Broadcast channel for real-time events (blocks, cells).
+    pub event_tx: tokio::sync::broadcast::Sender<crate::events::ApiEvent>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -61,6 +63,7 @@ impl AppState {
     /// Build a new [`AppState`] with a fresh (empty) [`TipTracker`] and
     /// an auth cache sized from the supplied [`Config`].
     pub fn new(db: PgPool, config: Config) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(1000);
         let auth_cache = AuthCache::new(
             config.api_auth_cache_capacity,
             Duration::from_secs(config.api_auth_cache_ttl_seconds),
@@ -74,6 +77,7 @@ impl AppState {
             metrics: Metrics::new(),
             redis: None,
             ckb: None,
+            event_tx,
         }
     }
 
@@ -81,6 +85,7 @@ impl AppState {
     /// want to poke a snapshot in before issuing requests, and by main
     /// when the tracker needs to be shared with the refresh task.
     pub fn with_tip(db: PgPool, config: Config, tip: TipTracker) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(1000);
         let auth_cache = AuthCache::new(
             config.api_auth_cache_capacity,
             Duration::from_secs(config.api_auth_cache_ttl_seconds),
@@ -94,6 +99,7 @@ impl AppState {
             metrics: Metrics::new(),
             redis: None,
             ckb: None,
+            event_tx,
         }
     }
 
