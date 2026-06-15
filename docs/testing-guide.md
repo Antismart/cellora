@@ -26,14 +26,13 @@ Fill in the form:
 
 - **Label**: A name to help you identify the key later, e.g. `beta-test`
 - **Tier**: Controls your rate limits (see the tier table below). Start with **Free** for general testing
-- **Network**: Choose **Mainnet** for the live CKB chain or **Pizza Testnet** for the test network
 
 Click **Create**. A modal will appear showing your full API key. **Copy it now.** The secret is shown exactly once and cannot be retrieved again. If you close this modal without copying, you will need to create a new key.
 
 Your key looks like this:
 
 ```
-cell_a1b2c3_8f9e2d...
+cell_a1b2c3d4_8f9e2d...
 ```
 
 Keep it somewhere safe for the duration of your testing session.
@@ -62,20 +61,19 @@ The indexer tip tile updates live every two seconds. A small lag of 0 to 5 block
 
 This is where you manage all your programmatic credentials.
 
-**The keys table** shows each key's label, masked prefix, tier, network, creation date, last used time, 24-hour request count, and status.
+**The keys table** shows each key's label, masked prefix, tier, creation date, last used time, 24-hour request count, and status.
 
 **Status values:**
 - **Active**: Working normally
-- **Rotated**: A new secret has been issued for this key; the old secret no longer works
-- **Revoked**: The key is permanently disabled
+- **Revoked**: The key has been disabled and no longer authenticates
 
 **Actions you can take from this page:**
 
-**Rotate a key**: Opens a confirmation modal and generates a new secret for the same key ID. The old secret stops working immediately. The new secret is shown once.
+**Rotate a key**: Opens a confirmation modal and generates a new secret for the same key. The old secret stops working and the new secret is shown once. Because authenticated requests are cached briefly, the old secret may continue to work for up to about 60 seconds before the change takes full effect.
 
-**Revoke a key**: Permanently deletes the key. Any clients using it will start receiving 401 responses within about 30 seconds. This action cannot be undone.
+**Revoke a key**: Disables the key. Clients using it will start receiving 401 responses within about 60 seconds (an internal auth cache means revocation is not instant). This action cannot be undone.
 
-**Filtering**: Use the **All / Mainnet / Testnet** tabs to filter by network, or the search box to find a key by label or prefix.
+**Filtering**: Use the search box to find a key by label or prefix.
 
 **Rate limit tiers** (these apply per key, with separate buckets for REST and GraphQL):
 
@@ -160,7 +158,7 @@ A sample query to try:
 
 The Status page shows the health of Cellora's infrastructure.
 
-At the top there is a banner indicating whether all systems are operational. Below that, the active network card (switched with the Mainnet / Pizza Testnet buttons in the sidebar) shows:
+At the top there is a banner indicating whether all systems are operational. Below that, the status card shows:
 
 - Live stats: indexer tip, node tip, lag, and snapshot age
 - Node-level health for each indexer node, including sync status and per-node lag
@@ -176,19 +174,11 @@ The Settings page shows your profile: GitHub handle, avatar, and email address.
 
 ---
 
-## Switching Networks
+## A Note on Networks
 
-The sidebar has two network buttons: **Mainnet** (green dot) and **Pizza Testnet** (amber dot). Clicking one switches your active network across the entire dashboard. The selection is saved in your browser and persists across sessions.
+For this beta, Cellora serves a **single CKB network**. Everything you query — blocks, cells, stats — comes from that one network, and your API keys are **not** tied to a network: any key works against all the data the service exposes.
 
-The active network is reflected throughout the UI. When you switch:
-
-- A coloured stripe at the top of the main content area changes from green (Mainnet) to amber (Testnet)
-- The network label next to the page title in the top bar changes colour to match
-- The Overview, Usage, and Explorer pages re-fetch their data scoped to the newly selected network
-- The active endpoint indicator in the Explorer sidebar uses the network accent colour
-- The Explorer URL bar shows a **MAIN** or **TEST** badge so you always know which network a query is going to
-
-Keys are network-specific. A key created for Mainnet cannot query Testnet data and vice versa. The network badge on each key row and a coloured left border (green for Mainnet, amber for Testnet) make it easy to tell them apart at a glance.
+Multi-network support (switching between Mainnet and a testnet, with network-scoped keys) is planned but **not yet live**. If you come across a network switcher, network badge, or a "Network" choice when creating a key in the dashboard, treat it as a preview of upcoming functionality — it does not currently change which data you receive or restrict which network a key can query. You don't need to test network switching during this round, and any behaviour around it is expected to be incomplete.
 
 ---
 
@@ -238,16 +228,6 @@ On successful requests, check the `x-ratelimit-remaining` header value in the Ex
 
 When querying cells via `GET /v1/cells`, try setting `limit=2` to force pagination. The response will include a `next_cursor` field. Pass that value back as `cursor=...` to fetch the next page. When you reach the last page, `next_cursor` will be null.
 
-### Network switching
-
-Create one key for Mainnet and one for Testnet. Switch between networks in the sidebar and verify:
-
-- The coloured top stripe and the network label in the top bar both update immediately
-- The Overview and Usage pages reload with data scoped to the selected network
-- The API Keys page filters to show only keys for the active network
-- In the Explorer, the **MAIN** / **TEST** badge in the URL bar updates and the active endpoint's left border changes colour
-- Switching to Testnet and firing a request in the Explorer with a Mainnet key returns 401
-
 ---
 
 ## Response Headers Worth Noting
@@ -260,7 +240,7 @@ Every authenticated API response includes headers that are useful for testing:
 | `x-indexer-tip` | The block height Cellora had indexed at the time of the response. |
 | `x-indexer-tip-stale` | If `true`, the indexer snapshot is outdated. Not expected on a healthy stack. |
 | `x-ratelimit-remaining` | Tokens left in your bucket for this request surface. |
-| `x-ratelimit-reset` | Unix timestamp of the next bucket refill. |
+| `x-ratelimit-reset` | Seconds until your bucket would refill to full from its current state. |
 | `retry-after` | Present on 429 responses only. Seconds until you can retry. |
 
 The Explorer surfaces `x-indexer-tip` and `x-ratelimit-remaining` automatically in the response panel. For other headers, use your browser's developer tools Network tab or a dedicated HTTP client like Insomnia or Postman with the key pasted in as a Bearer token.
@@ -276,6 +256,5 @@ A good report makes the difference between a fast fix and a hard-to-reproduce my
 3. **What actually happened**: Copy the full response body if it is an API error
 4. **The `x-request-id` value**: Visible in the Explorer response panel or browser dev tools. This lets the team find the exact request in server logs
 5. **A screenshot** if the issue is visual or in the dashboard UI
-6. **Your network selection** (Mainnet or Pizza Testnet) at the time of the issue
 
 Share reports in the feedback channel or issue tracker the team has provided for this beta.
