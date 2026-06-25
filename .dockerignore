@@ -1,0 +1,30 @@
+# Build artifacts — rebuilt inside the image; by far the largest context cost.
+target/
+**/target/
+
+# Version control and CI.
+.git/
+.gitignore
+.github/
+
+# Local tooling and editor state.
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docs and load tests are not needed to build the binaries.
+docs/
+tests/load/
+
+# Secrets and local env — never bake into an image. Keep the documented sample.
+.env
+.env.local
+*.env.local
+!.env.example
+
+# OS cruft and logs.
+.DS_Store
+Thumbs.db
+*.log

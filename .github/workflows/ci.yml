@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cellora
+          POSTGRES_PASSWORD: cellora
+          POSTGRES_DB: cellora
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cellora -d cellora"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 15
+
+    env:
+      # A live database backs SQLx compile-time query checking. The committed
+      # .sqlx/ cache covers library and binary code, but the integration-test
+      # targets contain extra query! macros that are not cached, so CI compiles
+      # the test targets against a real schema instead of the offline cache.
+      DATABASE_URL: postgres://cellora:cellora@localhost:5432/cellora
+      CELLORA_DATABASE_URL: postgres://cellora:cellora@localhost:5432/cellora
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Apply database schema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          for f in migrations/*.up.sql; do
+            echo "applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: rustfmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+  docker-build:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Validates the production image builds offline against the committed
+      # .sqlx/ cache. This also catches query-cache drift: if a query changes
+      # without `cargo sqlx prepare` being re-run, the offline build fails here
+      # even though the lint-and-test job (live database) would pass.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: false
+          tags: cellora:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
