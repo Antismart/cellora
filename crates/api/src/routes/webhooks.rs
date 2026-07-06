@@ -62,6 +62,9 @@ pub async fn create_webhook(
     if req.url.is_empty() || req.events.is_empty() {
         return Err(ApiError::BadRequest("url and events are required".into()));
     }
+    if let Err(reason) = crate::webhooks::validate_webhook_url(&req.url).await {
+        return Err(ApiError::BadRequest(format!("invalid webhook url: {reason}")));
+    }
 
     let record = sqlx::query(
         r#"

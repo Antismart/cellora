@@ -46,8 +46,13 @@ pub async fn me(
     })
 }
 
+/// Cookie carrying the OAuth `state` value. `github_start` sets it and
+/// `github_callback` requires it to match the `state` query parameter, which
+/// binds the callback to the browser that began the flow (login-CSRF defence).
+const OAUTH_STATE_COOKIE: &str = "cellora_oauth_state";
+
 /// `GET /admin/oauth/github/start` — redirect to GitHub OAuth.
-pub async fn github_start(State(state): State<AppState>) -> Result<Redirect, ApiError> {
+pub async fn github_start(State(state): State<AppState>) -> Result<Response, ApiError> {
     let config = &state.config;
     let client_id = config
         .dashboard_oauth_github_client_id
@@ -81,7 +86,14 @@ pub async fn github_start(State(state): State<AppState>) -> Result<Redirect, Api
     let authorize_url = format!(
         "https://github.com/login/oauth/authorize?client_id={client_id}&redirect_uri={redirect_url}&scope=read:user%20user:email&state={state_token}&allow_signup=true"
     );
-    Ok(Redirect::to(&authorize_url))
+
+    // Also stash the state in an HttpOnly cookie. The Redis entry alone is a
+    // global bearer value — proving only that *some* browser started a flow.
+    // The cookie proves the callback returned to *this* browser.
+    let cookie = build_oauth_state_cookie(&state_token, config.dashboard_cookie_secure);
+    let mut response = Redirect::to(&authorize_url).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    Ok(response)
 }
 
 /// `GET /admin/oauth/github/callback` — exchange code, mint session, redirect.
@@ -99,6 +111,15 @@ pub async fn github_callback(
     let state_token = query
         .state
         .ok_or_else(|| ApiError::BadRequest("missing state".into()))?;
+
+    // Bind the callback to the browser that began the flow: the `state` value
+    // must also be present in the HttpOnly cookie set by `github_start`. A
+    // valid Redis entry alone is a global bearer value and lets an attacker
+    // deliver their own (code, state) to a victim (login CSRF / fixation).
+    match read_cookie(&headers, OAUTH_STATE_COOKIE) {
+        Some(ref cookie_state) if cookie_state == &state_token => {}
+        _ => return Err(ApiError::Unauthorized("invalid oauth state")),
+    }
 
     let config = &state.config;
     let client_id = config
@@ -168,6 +189,11 @@ pub async fn github_callback(
     let cookie = build_session_cookie(&issued.plaintext, config.dashboard_cookie_secure, expires_at);
     let mut response = Redirect::to(dashboard_redirect).into_response();
     response.headers_mut().insert(header::SET_COOKIE, cookie);
+    // Clear the now-consumed state cookie so it cannot be replayed.
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        clear_oauth_state_cookie(config.dashboard_cookie_secure),
+    );
     Ok(response)
 }
 
@@ -652,4 +678,40 @@ fn clear_session_cookie(secure: bool) -> HeaderValue {
         cookie.push_str("; Secure");
     }
     HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+/// Short-lived HttpOnly cookie holding the OAuth `state` for the duration of
+/// the round-trip to GitHub (10 minutes, matching the Redis entry's TTL).
+fn build_oauth_state_cookie(state_token: &str, secure: bool) -> HeaderValue {
+    let mut cookie = format!(
+        "{OAUTH_STATE_COOKIE}={state_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600"
+    );
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+/// Expire the OAuth state cookie once the callback has consumed it.
+fn clear_oauth_state_cookie(secure: bool) -> HeaderValue {
+    let mut cookie =
+        format!("{OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+/// Read a named cookie value out of the request headers, or `None` if the
+/// header is absent, non-ASCII, or has no cookie of that name.
+fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for pair in raw.split(';') {
+        if let Some((key, value)) = pair.trim().split_once('=') {
+            if key == name && !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
 }

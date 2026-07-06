@@ -135,13 +135,14 @@ impl Poller {
             if let Some(stored_prev_hash) = blocks::hash_at(&self.pool, prev_height).await? {
                 let parent_hash = block.header.inner.parent_hash.0.to_vec();
                 if parent_hash != stored_prev_hash {
-                    self.handle_reorg(prev_height, &stored_prev_hash).await?;
-                    // Re-poll the new tip on the next iteration; do not
-                    // attempt to insert this block into the rolled-back
-                    // chain — the next height after the ancestor may be
+                    let ancestor_height =
+                        self.handle_reorg(prev_height, &stored_prev_hash).await?;
+                    // Re-poll from the block after the common ancestor on the
+                    // next iteration; do not attempt to insert this block into
+                    // the rolled-back chain — the next canonical height may be
                     // different from `block_number`.
                     return Ok(StepOutcome::ReorgHandled {
-                        new_tip: prev_height - 1,
+                        new_tip: ancestor_height,
                     });
                 }
             }
@@ -187,7 +188,7 @@ impl Poller {
         &self,
         suspect_height: i64,
         indexed_hash_at_suspect: &[u8],
-    ) -> Result<(), PollerError> {
+    ) -> Result<i64, PollerError> {
         let pool = self.pool.clone();
         let ancestor = reorg::find_common_ancestor(&self.ckb, suspect_height, |h| {
             let pool = pool.clone();
@@ -257,7 +258,13 @@ impl Poller {
         };
         reorg::publish_reorg(self.redis.as_ref(), &event).await;
 
-        Ok(())
+        // Resume from the block after the true common ancestor. Returning the
+        // ancestor height (not the poll height) is essential: `rollback_to`
+        // deleted every block above the ancestor and moved the checkpoint
+        // there, so any higher resume point would skip — and permanently lose —
+        // the blocks between the ancestor and the poll height on a multi-block
+        // reorg.
+        Ok(outcome.ancestor_height)
     }
 }
 

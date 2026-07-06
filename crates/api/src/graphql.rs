@@ -26,6 +26,12 @@ pub type ApiSchema = Schema<QueryRoot, EmptyMutation, SubscriptionRoot>;
 pub fn build_schema(state: AppState) -> ApiSchema {
     Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(state)
+        // Bound query cost so a single request cannot fan a handful of aliased
+        // `cells(...)` fields into dozens of heavy database queries while the
+        // rate limiter only charges one token. Both limits sit well above any
+        // legitimate dashboard or explorer query.
+        .limit_depth(15)
+        .limit_complexity(250)
         .finish()
 }
 

@@ -321,7 +321,7 @@ async fn graphql_handler(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(payload))
-        .unwrap()
+        .unwrap_or_default()
 }
 
 async fn graphql_subscription_handler(
