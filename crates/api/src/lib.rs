@@ -49,8 +49,8 @@ use axum::{Json, Router};
 use serde_json::json;
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
@@ -122,7 +122,10 @@ pub fn build_app(state: AppState) -> Router {
 
     let graphql_schema = graphql::build_schema(state.clone());
     let graphql_router = Router::new()
-        .route("/graphql", axum::routing::post(graphql_handler).get(graphql_subscription_handler))
+        .route(
+            "/graphql",
+            axum::routing::post(graphql_handler).get(graphql_subscription_handler),
+        )
         .layer(axum::Extension(graphql_schema))
         .layer(from_fn_with_state(state.clone(), rate_limit_graphql))
         .layer(from_fn_with_state(state.clone(), auth::middleware));
@@ -133,12 +136,21 @@ pub fn build_app(state: AppState) -> Router {
     // abuse becomes a concern we add a per-user limiter independently
     // of the per-key one.
     let admin_public = Router::new()
-        .route("/admin/oauth/github/start", get(routes::admin::github_start))
-        .route("/admin/oauth/github/callback", get(routes::admin::github_callback));
+        .route(
+            "/admin/oauth/github/start",
+            get(routes::admin::github_start),
+        )
+        .route(
+            "/admin/oauth/github/callback",
+            get(routes::admin::github_callback),
+        );
 
     let admin_routes = Router::new()
         .route("/admin/me", get(routes::admin::me))
-        .route("/admin/sign-out", axum::routing::post(routes::admin::sign_out))
+        .route(
+            "/admin/sign-out",
+            axum::routing::post(routes::admin::sign_out),
+        )
         .route(
             "/admin/keys",
             get(routes::admin::list_keys).post(routes::admin::create_key),
@@ -151,23 +163,39 @@ pub fn build_app(state: AppState) -> Router {
             "/admin/keys/:id/revoke",
             axum::routing::post(routes::admin::revoke_key),
         )
-        .route("/admin/webhooks", get(routes::webhooks::list_webhooks).post(routes::webhooks::create_webhook))
-        .route("/admin/webhooks/:id", axum::routing::delete(routes::webhooks::delete_webhook))
+        .route(
+            "/admin/webhooks",
+            get(routes::webhooks::list_webhooks).post(routes::webhooks::create_webhook),
+        )
+        .route(
+            "/admin/webhooks/:id",
+            axum::routing::delete(routes::webhooks::delete_webhook),
+        )
         .route("/admin/metrics/usage", get(routes::admin_metrics::usage))
-        .route("/admin/metrics/summary", get(routes::admin_metrics::summary))
-        .route("/admin/metrics/endpoints", get(routes::admin_metrics::endpoints))
-        .route("/admin/metrics/rate-limits", get(routes::admin_metrics::rate_limits))
+        .route(
+            "/admin/metrics/summary",
+            get(routes::admin_metrics::summary),
+        )
+        .route(
+            "/admin/metrics/endpoints",
+            get(routes::admin_metrics::endpoints),
+        )
+        .route(
+            "/admin/metrics/rate-limits",
+            get(routes::admin_metrics::rate_limits),
+        )
         .route(
             "/admin/metrics/activity",
             get(routes::admin_metrics::activity),
-        ).route("/admin/metrics/status", get(routes::admin_metrics::status))
+        )
+        .route("/admin/metrics/status", get(routes::admin_metrics::status))
         .layer(from_fn_with_state(state.clone(), session::middleware));
 
     let app = Router::new()
         .merge(public)
         .merge(rest)
         .merge(graphql_router)
-    .merge(admin_public)
+        .merge(admin_public)
         .merge(admin_routes)
         .layer(from_fn_with_state(state.clone(), tip_headers))
         .layer(from_fn_with_state(state.clone(), record_request_metrics))
@@ -273,7 +301,8 @@ async fn record_request_metrics(
             path: matched_path.clone(),
             status_code: status,
             latency_ms: (elapsed * 1000.0) as u32,
-        }).unwrap_or_default();
+        })
+        .unwrap_or_default();
 
         if let Some(mut redis) = state.redis.clone() {
             tokio::spawn(async move {

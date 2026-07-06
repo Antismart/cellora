@@ -1,6 +1,6 @@
 use cellora_common::events::{BlockMinedEvent, CellCreatedEvent, BLOCKS_CHANNEL, CELLS_CHANNEL};
-use redis::aio::ConnectionManager;
 use futures_util::StreamExt;
+use redis::aio::ConnectionManager;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
@@ -33,7 +33,7 @@ pub async fn run_event_listener(
                 continue;
             }
         };
-        
+
         let mut pubsub = conn;
         if let Err(e) = pubsub.subscribe(BLOCKS_CHANNEL).await {
             error!(error = %e, "failed to subscribe to blocks channel");

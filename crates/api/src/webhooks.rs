@@ -26,10 +26,7 @@ pub struct Webhook {
 /// Run the webhook dispatcher task.
 /// Listens to `rx` for incoming indexer events, loads configured webhooks,
 /// and dispatches HTTP POST requests.
-pub async fn run_webhook_dispatcher(
-    pool: PgPool,
-    mut rx: broadcast::Receiver<ApiEvent>,
-) {
+pub async fn run_webhook_dispatcher(pool: PgPool, mut rx: broadcast::Receiver<ApiEvent>) {
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
         // Never follow redirects: a 30x from a user-controlled endpoint could
@@ -83,7 +80,7 @@ async fn load_webhooks(pool: &PgPool, event_type: &str) -> Result<Vec<Webhook>, 
         SELECT id, user_id, url, events, secret
         FROM webhooks
         WHERE $1 = ANY(events)
-        "#
+        "#,
     )
     .bind(event_type)
     .fetch_all(pool)
@@ -162,11 +159,7 @@ async fn dispatch_webhook(client: &Client, webhook: &Webhook, event: &ApiEvent) 
         match req.send().await {
             Ok(res) => {
                 if !res.status().is_success() {
-                    warn!(
-                        "webhook {} returned error status: {}",
-                        url,
-                        res.status()
-                    );
+                    warn!("webhook {} returned error status: {}", url, res.status());
                 }
             }
             Err(e) => {

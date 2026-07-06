@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
             cancel.clone(),
         ));
     }
-    
+
     let mut event_worker_handle = None;
     if let Ok(client) = redis::Client::open(config.redis_url.as_str()) {
         event_worker_handle = Some(tokio::spawn(cellora_api::events::run_event_listener(

@@ -1,7 +1,7 @@
 use cellora_common::events::{BlockMinedEvent, CellCreatedEvent, BLOCKS_CHANNEL, CELLS_CHANNEL};
 use cellora_db::models::{BlockRow, CellRow, HashType};
-use redis::{AsyncCommands, RedisResult};
 use redis::aio::ConnectionManager;
+use redis::{AsyncCommands, RedisResult};
 use tracing::{error, info, warn};
 
 pub async fn publish_block_and_cells(

@@ -19,8 +19,8 @@ use base64::Engine;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::RngCore;
 use redis::AsyncCommands;
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -30,17 +30,15 @@ use cellora_db::{api_keys, sessions, users};
 use crate::error::ErrorEnvelope;
 use crate::keys;
 use crate::session::AuthenticatedSession;
-use crate::{error::ApiError, session};
 use crate::state::AppState;
+use crate::{error::ApiError, session};
 
 /// `GET /admin/me` — current dashboard user.
 ///
 /// Returns the public profile fields of the authenticated user. The
 /// internal `github_user_id` is deliberately not surfaced; the
 /// dashboard never needs it.
-pub async fn me(
-    Extension(auth): Extension<AuthenticatedSession>,
-) -> Json<MeResponse> {
+pub async fn me(Extension(auth): Extension<AuthenticatedSession>) -> Json<MeResponse> {
     Json(MeResponse {
         user: UserView::from(auth.user),
     })
@@ -134,10 +132,7 @@ pub async fn github_callback(
         .dashboard_oauth_github_redirect_url
         .as_deref()
         .ok_or_else(|| ApiError::UpstreamUnavailable("oauth not configured"))?;
-    let dashboard_redirect = config
-        .dashboard_redirect_url
-        .as_deref()
-        .unwrap_or("/");
+    let dashboard_redirect = config.dashboard_redirect_url.as_deref().unwrap_or("/");
 
     let Some(manager) = state.redis.as_ref() else {
         return Err(ApiError::UpstreamUnavailable("redis unavailable"));
@@ -163,9 +158,7 @@ pub async fn github_callback(
     let profile = fetch_github_profile(&client, &token)
         .await
         .map_err(|_| ApiError::UpstreamUnavailable("github profile failed"))?;
-    let email = fetch_github_email(&client, &token)
-        .await
-        .unwrap_or(None);
+    let email = fetch_github_email(&client, &token).await.unwrap_or(None);
 
     let user = users::upsert_from_github(
         &state.db,
@@ -186,7 +179,11 @@ pub async fn github_callback(
         .await
         .map_err(ApiError::from)?;
 
-    let cookie = build_session_cookie(&issued.plaintext, config.dashboard_cookie_secure, expires_at);
+    let cookie = build_session_cookie(
+        &issued.plaintext,
+        config.dashboard_cookie_secure,
+        expires_at,
+    );
     let mut response = Redirect::to(dashboard_redirect).into_response();
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     // Clear the now-consumed state cookie so it cannot be replayed.
@@ -258,8 +255,8 @@ pub async fn create_key(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let issued = keys::generate()
-        .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?;
+    let issued =
+        keys::generate().map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?;
     let row = api_keys::insert(
         &state.db,
         auth.user.id,
@@ -301,8 +298,8 @@ pub async fn rotate_key(
 ) -> Result<Json<CreateKeyResponse>, ApiError> {
     let id = parse_uuid(&raw_id)?;
 
-    let issued = keys::generate()
-        .map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?;
+    let issued =
+        keys::generate().map_err(|err| ApiError::Internal(anyhow::anyhow!(err.to_string())))?;
     let row = api_keys::rotate_for_user(
         &state.db,
         id,
@@ -651,12 +648,22 @@ fn select_email(payload: &[GithubEmail]) -> Option<String> {
         .iter()
         .find(|e| e.primary && e.verified)
         .or_else(|| payload.iter().find(|e| e.verified))
-        .or_else(|| payload.iter().find(|e| e.visibility.as_deref() == Some("public")))
+        .or_else(|| {
+            payload
+                .iter()
+                .find(|e| e.visibility.as_deref() == Some("public"))
+        })
         .map(|e| e.email.clone())
 }
 
-fn build_session_cookie(token: &str, secure: bool, expires_at: chrono::DateTime<Utc>) -> HeaderValue {
-    let max_age = expires_at.timestamp().saturating_sub(Utc::now().timestamp());
+fn build_session_cookie(
+    token: &str,
+    secure: bool,
+    expires_at: chrono::DateTime<Utc>,
+) -> HeaderValue {
+    let max_age = expires_at
+        .timestamp()
+        .saturating_sub(Utc::now().timestamp());
     let mut cookie = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
         session::COOKIE_NAME,
@@ -683,9 +690,8 @@ fn clear_session_cookie(secure: bool) -> HeaderValue {
 /// Short-lived HttpOnly cookie holding the OAuth `state` for the duration of
 /// the round-trip to GitHub (10 minutes, matching the Redis entry's TTL).
 fn build_oauth_state_cookie(state_token: &str, secure: bool) -> HeaderValue {
-    let mut cookie = format!(
-        "{OAUTH_STATE_COOKIE}={state_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600"
-    );
+    let mut cookie =
+        format!("{OAUTH_STATE_COOKIE}={state_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600");
     if secure {
         cookie.push_str("; Secure");
     }
@@ -694,8 +700,7 @@ fn build_oauth_state_cookie(state_token: &str, secure: bool) -> HeaderValue {
 
 /// Expire the OAuth state cookie once the callback has consumed it.
 fn clear_oauth_state_cookie(secure: bool) -> HeaderValue {
-    let mut cookie =
-        format!("{OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    let mut cookie = format!("{OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     if secure {
         cookie.push_str("; Secure");
     }

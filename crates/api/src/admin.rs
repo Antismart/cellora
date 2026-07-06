@@ -22,7 +22,7 @@
 // service code paths.
 #![allow(clippy::print_stdout, clippy::print_literal)]
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use cellora_db::api_keys;
 use cellora_db::models::ApiKeyTier;
 use cellora_db::users;
@@ -115,7 +115,12 @@ impl From<TierArg> for ApiKeyTier {
 /// no-op completion.
 pub async fn run(pool: &PgPool, action: AdminAction) -> Result<()> {
     match action {
-        AdminAction::CreateKey { github_login, tier, label, json } => {
+        AdminAction::CreateKey {
+            github_login,
+            tier,
+            label,
+            json,
+        } => {
             let user = users::find_by_github_login(pool, &github_login)
                 .await
                 .context("lookup user")?

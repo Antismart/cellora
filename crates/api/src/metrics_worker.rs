@@ -1,5 +1,5 @@
-use std::time::Duration;
 use sqlx::PgPool;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[derive(serde::Deserialize, Debug)]
@@ -31,7 +31,7 @@ pub fn spawn(
                             if items.is_empty() {
                                 continue;
                             }
-                            
+
                             // Insert in a batch or one by one. For MVP, one by one is fine
                             // or we can build a bulk insert query
                             for json_str in items {

@@ -135,8 +135,7 @@ impl Poller {
             if let Some(stored_prev_hash) = blocks::hash_at(&self.pool, prev_height).await? {
                 let parent_hash = block.header.inner.parent_hash.0.to_vec();
                 if parent_hash != stored_prev_hash {
-                    let ancestor_height =
-                        self.handle_reorg(prev_height, &stored_prev_hash).await?;
+                    let ancestor_height = self.handle_reorg(prev_height, &stored_prev_hash).await?;
                     // Re-poll from the block after the common ancestor on the
                     // next iteration; do not attempt to insert this block into
                     // the rolled-back chain — the next canonical height may be

@@ -13,7 +13,9 @@ use cellora_db::models::{
     ApiKeyTier, BlockRow, CellRow, Checkpoint, ConsumedCellRef, HashType, ReorgStatus,
     TransactionRow,
 };
-use cellora_db::{api_keys, blocks, cells, checkpoint, connect, migrate, reorg_log, transactions, users};
+use cellora_db::{
+    api_keys, blocks, cells, checkpoint, connect, migrate, reorg_log, transactions, users,
+};
 use testcontainers_modules::{
     postgres::Postgres,
     testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},

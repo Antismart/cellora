@@ -164,10 +164,7 @@ mod tests {
             header::COOKIE,
             HeaderValue::from_static("foo=1; cellora_session=abc; bar=2"),
         );
-        assert_eq!(
-            extract_session_cookie(&headers),
-            Some("abc".to_owned()),
-        );
+        assert_eq!(extract_session_cookie(&headers), Some("abc".to_owned()),);
     }
 
     #[test]
@@ -183,7 +180,9 @@ mod tests {
         let h2 = hash_token("token-value");
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64);
-        assert!(h1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(h1
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]

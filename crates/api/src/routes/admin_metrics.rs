@@ -1,10 +1,10 @@
+use crate::error::ApiError;
+use crate::session::AuthenticatedSession;
+use crate::state::AppState;
 use axum::extract::{Extension, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use crate::error::ApiError;
-use crate::session::AuthenticatedSession;
-use crate::state::AppState;
 
 #[derive(Serialize)]
 pub struct UsageDataPoint {
@@ -124,19 +124,27 @@ pub async fn status(
 ) -> Result<Json<StatusResponse>, ApiError> {
     let network = query.network.unwrap_or_else(|| "mainnet".to_string());
     let tip = state.tip.get();
-    
+
     let nodes = if network == "testnet" {
         vec![NodeStatus {
             name: "ckb-pizza-01 (primary)".to_string(),
             tip: tip.node_tip.unwrap_or(0).try_into().unwrap_or(0),
-            sync_status: if tip.is_stale() { "syncing".to_string() } else { "synced".to_string() },
+            sync_status: if tip.is_stale() {
+                "syncing".to_string()
+            } else {
+                "synced".to_string()
+            },
             latency: 0,
         }]
     } else {
         vec![NodeStatus {
             name: "ckb-node-01 (primary)".to_string(),
             tip: tip.node_tip.unwrap_or(0).try_into().unwrap_or(0),
-            sync_status: if tip.is_stale() { "syncing".to_string() } else { "synced".to_string() },
+            sync_status: if tip.is_stale() {
+                "syncing".to_string()
+            } else {
+                "synced".to_string()
+            },
             latency: 0,
         }]
     };
@@ -192,9 +200,17 @@ pub async fn summary(
     let errors = row.errors_count.unwrap_or(0);
     let rl = row.rl_count.unwrap_or(0);
 
-    let error_rate = if recent > 0 { (errors as f64 / recent as f64) * 100.0 } else { 0.0 };
-    let rate_limit_rate = if recent > 0 { (rl as f64 / recent as f64) * 100.0 } else { 0.0 };
-    
+    let error_rate = if recent > 0 {
+        (errors as f64 / recent as f64) * 100.0
+    } else {
+        0.0
+    };
+    let rate_limit_rate = if recent > 0 {
+        (rl as f64 / recent as f64) * 100.0
+    } else {
+        0.0
+    };
+
     let vs_yesterday_percent = if old > 0 {
         ((recent as f64 - old as f64) / old as f64) * 100.0
     } else if recent > 0 {

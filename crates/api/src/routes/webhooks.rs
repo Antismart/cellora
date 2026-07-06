@@ -34,7 +34,7 @@ pub async fn list_webhooks(
         FROM webhooks
         WHERE user_id = $1
         ORDER BY created_at DESC
-        "#
+        "#,
     )
     .bind(auth.user.id)
     .fetch_all(&state.db)
@@ -63,7 +63,9 @@ pub async fn create_webhook(
         return Err(ApiError::BadRequest("url and events are required".into()));
     }
     if let Err(reason) = crate::webhooks::validate_webhook_url(&req.url).await {
-        return Err(ApiError::BadRequest(format!("invalid webhook url: {reason}")));
+        return Err(ApiError::BadRequest(format!(
+            "invalid webhook url: {reason}"
+        )));
     }
 
     let record = sqlx::query(
@@ -71,7 +73,7 @@ pub async fn create_webhook(
         INSERT INTO webhooks (user_id, url, events, secret)
         VALUES ($1, $2, $3, $4)
         RETURNING id, url, events, created_at
-        "#
+        "#,
     )
     .bind(auth.user.id)
     .bind(&req.url)
@@ -94,17 +96,15 @@ pub async fn delete_webhook(
     Extension(auth): Extension<AuthenticatedSession>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
-    let webhook_id = Uuid::parse_str(&id)
-        .map_err(|_| ApiError::BadRequest("invalid webhook id".into()))?;
+    let webhook_id =
+        Uuid::parse_str(&id).map_err(|_| ApiError::BadRequest("invalid webhook id".into()))?;
 
-    let res = sqlx::query(
-        "DELETE FROM webhooks WHERE id = $1 AND user_id = $2"
-    )
-    .bind(webhook_id)
-    .bind(auth.user.id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(e.into()))?;
+    let res = sqlx::query("DELETE FROM webhooks WHERE id = $1 AND user_id = $2")
+        .bind(webhook_id)
+        .bind(auth.user.id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
 
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound("webhook not found"));

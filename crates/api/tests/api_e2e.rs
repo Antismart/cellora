@@ -333,7 +333,7 @@ fn test_config(database_url: &str) -> Config {
         api_max_page_size: 500,
         api_request_timeout_ms: 10_000,
         api_tip_cache_refresh_ms: 1_000,
-    api_cors_allowed_origins: None,
+        api_cors_allowed_origins: None,
         dashboard_oauth_github_client_id: Some("test-client".to_owned()),
         dashboard_oauth_github_client_secret: Some("test-secret".to_owned()),
         dashboard_oauth_github_redirect_url: Some(
@@ -2093,10 +2093,7 @@ async fn admin_me_returns_user_for_valid_session() {
     let body = read_json(response.into_body()).await;
     assert_eq!(body["user"]["github_login"], "test-user");
     assert_eq!(body["user"]["email"], "test@example.com");
-    assert_eq!(
-        body["user"]["avatar_url"],
-        "https://example.com/avatar.png"
-    );
+    assert_eq!(body["user"]["avatar_url"], "https://example.com/avatar.png");
     // github_user_id is internal — must not appear in the public projection.
     assert!(body["user"].get("github_user_id").is_none());
 }
@@ -2127,15 +2124,9 @@ async fn admin_oauth_start_redirects_to_github() {
 #[tokio::test(flavor = "multi_thread")]
 async fn admin_me_rejects_expired_session() {
     let harness = up().await;
-    let user = users::upsert_from_github(
-        &harness.pool,
-        7_777_777_777,
-        "expired-user",
-        None,
-        None,
-    )
-    .await
-    .expect("upsert user");
+    let user = users::upsert_from_github(&harness.pool, 7_777_777_777, "expired-user", None, None)
+        .await
+        .expect("upsert user");
 
     let token = api_session::generate_token();
     let already_expired = Utc::now() - ChronoDuration::hours(1);
