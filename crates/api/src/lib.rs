@@ -306,9 +306,32 @@ async fn record_request_metrics(
 
         if let Some(mut redis) = state.redis.clone() {
             tokio::spawn(async move {
+                /// Hard cap on the number of buffered request-log entries kept in
+                /// the Redis `api_request_logs` list.
+                ///
+                /// Without a cap the list grows unbounded whenever ingestion
+                /// outpaces the draining worker (above roughly 1,000 req/s),
+                /// eventually exhausting the Redis instance that is shared with
+                /// the rate limiter and readiness probe (a self-inflicted DoS).
+                /// Capping bounds worst-case memory to this many entries.
+                const MAX_BUFFERED_LOGS: i64 = 100_000;
+
                 let _: Result<(), _> = redis::cmd("LPUSH")
                     .arg("api_request_logs")
                     .arg(payload)
+                    .query_async(&mut redis)
+                    .await;
+
+                // Bound the list length. LPUSH inserts the newest entry at the
+                // head (index 0); LTRIM keeps the inclusive range [0, MAX-1],
+                // i.e. the MAX newest entries at the head, and discards any
+                // surplus at the tail — which is exactly where the oldest
+                // entries live and where the worker RPOPs from. So excess load
+                // drops the oldest, never-yet-processed entries first.
+                let _: Result<(), _> = redis::cmd("LTRIM")
+                    .arg("api_request_logs")
+                    .arg(0)
+                    .arg(MAX_BUFFERED_LOGS - 1)
                     .query_async(&mut redis)
                     .await;
             });

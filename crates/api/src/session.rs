@@ -138,7 +138,9 @@ async fn resolve(state: &AppState, hash: &str) -> Result<AuthenticatedSession, A
 pub fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     for pair in raw.split(';') {
-        let (key, value) = pair.trim().split_once('=')?;
+        let Some((key, value)) = pair.trim().split_once('=') else {
+            continue;
+        };
         if key == COOKIE_NAME && !value.is_empty() {
             return Some(value.to_owned());
         }
@@ -165,6 +167,16 @@ mod tests {
             HeaderValue::from_static("foo=1; cellora_session=abc; bar=2"),
         );
         assert_eq!(extract_session_cookie(&headers), Some("abc".to_owned()),);
+    }
+
+    #[test]
+    fn extract_skips_value_less_segment_before_target() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("flag; cellora_session=abc"),
+        );
+        assert_eq!(extract_session_cookie(&headers), Some("abc".to_owned()));
     }
 
     #[test]

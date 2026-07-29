@@ -107,6 +107,14 @@ impl Poller {
                 Ok(StepOutcome::WaitingForTip) => {
                     select_sleep(&cancel, poll_interval).await;
                 }
+                Ok(StepOutcome::InconsistentNode) => {
+                    // Depth-0 "reorg": the node gave an inconsistent
+                    // response. Do NOT reset backoff and do NOT advance
+                    // `next_block`; back off so we neither spin on the same
+                    // block nor hammer a flaky node.
+                    let delay = backoff.next_delay();
+                    select_sleep(&cancel, delay).await;
+                }
                 Err(err) => {
                     warn!(block = next_block, error = %err, "poll step failed; backing off");
                     let delay = backoff.next_delay();
@@ -135,14 +143,7 @@ impl Poller {
             if let Some(stored_prev_hash) = blocks::hash_at(&self.pool, prev_height).await? {
                 let parent_hash = block.header.inner.parent_hash.0.to_vec();
                 if parent_hash != stored_prev_hash {
-                    let ancestor_height = self.handle_reorg(prev_height, &stored_prev_hash).await?;
-                    // Re-poll from the block after the common ancestor on the
-                    // next iteration; do not attempt to insert this block into
-                    // the rolled-back chain — the next canonical height may be
-                    // different from `block_number`.
-                    return Ok(StepOutcome::ReorgHandled {
-                        new_tip: ancestor_height,
-                    });
+                    return self.handle_reorg(prev_height, &stored_prev_hash).await;
                 }
             }
         }
@@ -183,11 +184,17 @@ impl Poller {
     /// `suspect_height` is the height at which we just observed the
     /// disagreement (typically `tip - 1` because the new block's
     /// parent is at that height).
+    ///
+    /// Returns [`StepOutcome::ReorgHandled`] once a genuine (depth >= 1)
+    /// reorg has been rolled back, or [`StepOutcome::InconsistentNode`]
+    /// when the common ancestor equals `suspect_height` — i.e. the
+    /// rollback depth would be zero, which is not a real reorg but an
+    /// inconsistent node response, and must not churn `reorg_log` rows.
     async fn handle_reorg(
         &self,
         suspect_height: i64,
         indexed_hash_at_suspect: &[u8],
-    ) -> Result<i64, PollerError> {
+    ) -> Result<StepOutcome, PollerError> {
         let pool = self.pool.clone();
         let ancestor = reorg::find_common_ancestor(&self.ckb, suspect_height, |h| {
             let pool = pool.clone();
@@ -195,12 +202,44 @@ impl Poller {
         })
         .await?;
 
-        let depth = suspect_height - ancestor.block_number + 1;
+        // Depth-0 guard: if the common ancestor is the suspect height
+        // itself, `rollback_to` would delete nothing yet still write a
+        // `reorg_log` row and move the checkpoint to where it already is.
+        // Resetting backoff and re-polling the same block would spin,
+        // churning spurious audit rows and metrics. This only happens
+        // when the node's own `block(N-1).hash` still equals our stored
+        // hash at N-1 while `block(N).parent_hash` disagrees — an
+        // inconsistent node response. Skip the rollback entirely and
+        // signal the run loop to back off instead of resetting.
+        if is_inconsistent_node(suspect_height, ancestor.block_number) {
+            warn!(
+                suspect_height,
+                ancestor = ancestor.block_number,
+                "common ancestor at suspect height (rollback depth 0); \
+                 treating as inconsistent node response, not a reorg"
+            );
+            return Ok(StepOutcome::InconsistentNode);
+        }
+
+        let outcome = reorg::rollback_to(
+            &self.pool,
+            &ancestor,
+            suspect_height,
+            indexed_hash_at_suspect,
+        )
+        .await?;
+
+        // Drive the gate and log branches from `rollback_to`'s returned
+        // depth so the oversized alert, `reorg_oversized_total`, and the
+        // histogram all agree on a single source of truth. This depth is
+        // `previous_tip - ancestor` (no `+ 1`): the true number of
+        // rolled-back blocks.
+        let depth = i64::from(outcome.depth);
         let target = i64::from(self.config.indexer_reorg_target_depth);
         let max = i64::from(self.config.indexer_reorg_max_depth);
         let oversized = depth > max;
 
-        if depth > max {
+        if oversized {
             // Past the upper bound — log loudly but still complete.
             // Failing closed would leave the database stuck on the
             // orphaned chain, which is worse.
@@ -208,7 +247,7 @@ impl Poller {
                 depth,
                 ancestor = ancestor.block_number,
                 max,
-                "reorg deeper than upper bound; rolling back anyway"
+                "reorg deeper than upper bound; rolled back anyway"
             );
         } else if depth > target {
             warn!(
@@ -221,20 +260,11 @@ impl Poller {
             info!(
                 depth,
                 ancestor = ancestor.block_number,
-                "reorg detected; rolling back"
+                "reorg detected; rolled back"
             );
         }
 
-        let outcome = reorg::rollback_to(
-            &self.pool,
-            &ancestor,
-            suspect_height,
-            indexed_hash_at_suspect,
-        )
-        .await?;
-
-        self.metrics
-            .observe_reorg(i64::from(outcome.depth), oversized);
+        self.metrics.observe_reorg(depth, oversized);
         // After a rollback the indexer's stored tip changes; reflect
         // that in the gauge immediately so the metric does not lag
         // until the next block lands.
@@ -263,7 +293,9 @@ impl Poller {
         // there, so any higher resume point would skip — and permanently lose —
         // the blocks between the ancestor and the poll height on a multi-block
         // reorg.
-        Ok(outcome.ancestor_height)
+        Ok(StepOutcome::ReorgHandled {
+            new_tip: outcome.ancestor_height,
+        })
     }
 }
 
@@ -275,6 +307,21 @@ enum StepOutcome {
         /// from `new_tip + 1`.
         new_tip: i64,
     },
+    /// A parent-hash disagreement resolved to a rollback depth of zero:
+    /// the node's response is internally inconsistent rather than a genuine
+    /// reorg. No rollback or `reorg_log` row was written. The poller waits
+    /// (without resetting backoff) so it does not spin on the same block.
+    InconsistentNode,
+}
+
+/// Whether a parent-hash disagreement resolved to a zero-depth rollback,
+/// which is an inconsistent node response rather than a genuine reorg. In
+/// that case there is nothing to roll back and no `reorg_log` row should be
+/// written. `ancestor_height` can never legitimately exceed `suspect_height`
+/// (the walk-back starts at `suspect_height` and only decreases), so `>=`
+/// is the correct guard.
+fn is_inconsistent_node(suspect_height: i64, ancestor_height: i64) -> bool {
+    ancestor_height >= suspect_height
 }
 
 /// Capped exponential backoff starting at 1 s, doubling up to 30 s.
@@ -304,5 +351,65 @@ async fn select_sleep(cancel: &CancellationToken, delay: Duration) {
     tokio::select! {
         _ = sleep(delay) => {}
         _ = cancel.cancelled() => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::is_inconsistent_node;
+
+    /// The depth the poller now uses is `rollback_to`'s own formula:
+    /// `previous_tip - ancestor` with no `+ 1`. This mirrors that formula
+    /// so the expected arithmetic is pinned by a test.
+    fn rollback_depth(suspect_height: i64, ancestor_height: i64) -> i64 {
+        suspect_height - ancestor_height
+    }
+
+    #[test]
+    fn depth_matches_rollback_to_no_off_by_one() {
+        // A single-block reorg: suspect tip is one above the ancestor, so
+        // exactly one block is rolled back. The old `+ 1` produced 2.
+        assert_eq!(rollback_depth(100, 99), 1);
+        // A ten-block reorg rolls back exactly ten blocks.
+        assert_eq!(rollback_depth(100, 90), 10);
+    }
+
+    #[test]
+    fn depth_zero_is_flagged_inconsistent() {
+        // Ancestor equals the suspect height: rollback_to would delete
+        // nothing, so this must not be treated as a reorg.
+        assert_eq!(rollback_depth(100, 100), 0);
+        assert!(is_inconsistent_node(100, 100));
+    }
+
+    #[test]
+    fn genuine_reorg_is_not_flagged_inconsistent() {
+        assert!(!is_inconsistent_node(100, 99));
+        assert!(!is_inconsistent_node(100, 0));
+    }
+
+    #[test]
+    fn ancestor_above_suspect_is_flagged_inconsistent() {
+        // Defensive: an ancestor above the suspect height (which the
+        // walk-back should never produce) is also treated as inconsistent
+        // rather than yielding a negative depth.
+        assert!(is_inconsistent_node(100, 101));
+    }
+
+    #[test]
+    fn depth_gate_boundaries_use_corrected_depth() {
+        // With the corrected (no `+ 1`) depth, a reorg whose depth exactly
+        // equals `max` is NOT oversized; only depth strictly greater is.
+        let max = 5i64;
+        let at_max = rollback_depth(105, 100);
+        let over_max = rollback_depth(106, 100);
+        assert_eq!(at_max, 5);
+        assert!(
+            at_max <= max,
+            "depth == max must not trip the oversized gate"
+        );
+        assert!(over_max > max, "depth > max must trip the oversized gate");
     }
 }

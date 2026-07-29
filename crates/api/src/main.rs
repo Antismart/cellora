@@ -117,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
     let webhook_worker_handle = tokio::spawn(cellora_api::webhooks::run_webhook_dispatcher(
         pool.clone(),
         state.event_tx.subscribe(),
+        cancel.clone(),
     ));
 
     if let Some(limiter) = rate_limiter {
