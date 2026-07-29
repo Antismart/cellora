@@ -176,9 +176,9 @@ The Settings page shows your profile: GitHub handle, avatar, and email address.
 
 ## A Note on Networks
 
-For this beta, Cellora serves a **single CKB network**. Everything you query — blocks, cells, stats — comes from that one network, and your API keys are **not** tied to a network: any key works against all the data the service exposes.
+Cellora serves both **Mainnet** and a **testnet**. Use the network switcher in the dashboard to choose which network you're querying; the Explorer and status views follow the selected network.
 
-Multi-network support (switching between Mainnet and a testnet, with network-scoped keys) is planned but **not yet live**. If you come across a network switcher, network badge, or a "Network" choice when creating a key in the dashboard, treat it as a preview of upcoming functionality — it does not currently change which data you receive or restrict which network a key can query. You don't need to test network switching during this round, and any behaviour around it is expected to be incomplete.
+Your API keys work across the networks the service exposes — a key is not locked to a single network. Network-scoped keys (restricting a key to one network) are planned but not yet live, so treat any per-key network choice as informational for now.
 
 ---
 
