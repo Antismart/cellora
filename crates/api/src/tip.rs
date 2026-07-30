@@ -147,27 +147,42 @@ pub fn spawn_refresh_task(
 /// One refresh iteration. Reads both tips; on success publishes a new
 /// snapshot, on failure logs and leaves the previous snapshot in place.
 async fn refresh_once(tracker: &TipTracker, pool: &PgPool, ckb: &CkbClient) {
-    let indexer_tip = match cellora_db::checkpoint::read(pool).await {
-        Ok(row) => row.map(|c| c.last_indexed_block),
+    let previous = tracker.get();
+
+    let (indexer_tip, indexer_ok) = match cellora_db::checkpoint::read(pool).await {
+        Ok(row) => (row.map(|c| c.last_indexed_block), true),
         Err(err) => {
             tracing::warn!(error = %err, "tip refresh: indexer tip query failed");
-            tracker.get().indexer_tip
+            (previous.indexer_tip, false)
         }
     };
 
-    let node_tip = match ckb.tip_block_number().await {
-        Ok(n) => Some(n),
+    let (node_tip, node_ok) = match ckb.tip_block_number().await {
+        Ok(n) => (Some(n), true),
         Err(err) => {
             tracing::warn!(error = %err, "tip refresh: node tip query failed");
-            tracker.get().node_tip
+            (previous.node_tip, false)
         }
+    };
+
+    // Only advance the observation timestamp when BOTH sources were read
+    // successfully this cycle. On any failure we carry the previous
+    // timestamp forward so the snapshot ages and `is_stale` trips after
+    // `STALE_AFTER`. Re-stamping on failure would mask a dead CKB node or
+    // database as fresh: the tip would freeze while `is_stale` stayed
+    // `false` and `snapshot_age_seconds` stayed `0` (the exact failure this
+    // guards against).
+    let (observed_at, observed_monotonic) = if indexer_ok && node_ok {
+        (SystemTime::now(), Instant::now())
+    } else {
+        (previous.observed_at, previous.observed_monotonic)
     };
 
     tracker.set(TipSnapshot {
         indexer_tip,
         node_tip,
-        observed_at: SystemTime::now(),
-        observed_monotonic: Instant::now(),
+        observed_at,
+        observed_monotonic,
     });
 }
 
@@ -195,6 +210,25 @@ mod tests {
         };
         assert!(!snap.is_stale());
         assert_eq!(snap.lag_blocks(), Some(2));
+    }
+
+    #[test]
+    fn carried_forward_snapshot_goes_stale_when_source_read_fails() {
+        // Mirrors what `refresh_once` now publishes on a CKB/DB failure: the
+        // tips are carried forward but the observation timestamp is NOT
+        // re-stamped, so an old `observed_monotonic` makes the snapshot read
+        // stale even though `node_tip` is populated. Guards the regression
+        // where a down node was masked as fresh (is_stale:false).
+        let snap = TipSnapshot {
+            indexer_tip: Some(1_910_830),
+            node_tip: Some(1_910_830),
+            observed_at: UNIX_EPOCH,
+            observed_monotonic: Instant::now()
+                .checked_sub(STALE_AFTER * 2)
+                .unwrap_or_else(Instant::now),
+        };
+        assert!(snap.is_stale());
+        assert_eq!(snap.lag_blocks(), Some(0));
     }
 
     #[test]
