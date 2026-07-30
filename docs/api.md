@@ -23,6 +23,12 @@ Argon2id hash of the secret are persisted; a lost key is unrecoverable
 and must be reissued. Tier (`free`, `starter`, `pro`) drives rate-limit
 parameters and is fixed for the lifetime of the key.
 
+> **Testing phase:** tiers are currently **rate-limit presets only** —
+> there is no billing or payment yet, and every tier is freely available
+> while the service is in testing. Paid plans and usage-based billing are
+> planned for a later milestone, once testing is complete. Pick the tier
+> whose limits suit your workload; you will not be charged for any of them.
+
 **Public paths (no auth required):**
 
 - `GET /v1/health`
@@ -107,15 +113,21 @@ curl -s http://localhost:8080/v1/health | jq
 
 ### `GET /v1/health/ready` — readiness
 
-Returns 200 when the database pool is reachable, 503 otherwise. Used by
-container orchestrators for readiness probes.
+Returns 200 when the database, Redis, and the CKB node are all reachable;
+503 if any dependency is failing. Used by container orchestrators for
+readiness probes.
 
 ```bash
 curl -s http://localhost:8080/v1/health/ready | jq
 ```
 
 ```json
-{ "status": "ready", "db": "ok" }
+{
+  "status": "ready",
+  "db": "ok",
+  "redis": "ok",
+  "ckb_node": { "state": "ok", "tip": 1910830, "is_synced": true }
+}
 ```
 
 ### `GET /v1/blocks/latest`
